@@ -1433,6 +1433,59 @@ func anchorHint(a *domain.Anchor) string {
 	return fmt.Sprintf(" line %d", a.Line)
 }
 
+func (m *Model) replyTargetLabel(width int) string {
+	id := m.replyParentID
+	if id == "" {
+		id = m.threadTargetID
+	}
+	var author, body string
+	for _, c := range m.comments {
+		if c.ID == id {
+			author, body = c.Author, c.Body
+			break
+		}
+	}
+	line := strings.TrimSpace(anchorHint(m.selectedAnchor()))
+	if author == "" {
+		if line != "" {
+			return "✎ reply · " + line + "  (enter save · esc cancel)"
+		}
+		return "✎ reply  (enter save · esc cancel)"
+	}
+	snippet := strings.Join(strings.Fields(body), " ")
+	if snippet == "" {
+		snippet = "(empty)"
+	}
+	head := "✎ reply to " + author
+	if line != "" {
+		head += " · " + line
+	}
+	head += ":"
+	if width <= 0 {
+		width = 60
+	}
+	// Keep label readable: wrap author/line then a short quoted snippet.
+	maxSnippet := width - 4
+	if maxSnippet < 20 {
+		maxSnippet = 20
+	}
+	snippet = truncate(snippet, maxSnippet)
+	return head + "\n  “" + snippet + "”  (enter save · esc cancel)"
+}
+
+func (m *Model) commentEditorLabel(width int) string {
+	if m.editingID != "" {
+		return "✎ edit draft" + anchorHint(m.selectedAnchor()) + "  (enter save · esc cancel)"
+	}
+	if m.replyParentID != "" {
+		return m.replyTargetLabel(width)
+	}
+	if m.commentGeneral {
+		return "✎ general comment  (enter save · esc cancel)"
+	}
+	return "✎ comment" + anchorHint(m.selectedAnchor()) + "  (enter save · esc cancel)"
+}
+
 func (m *Model) moveCursor(delta int) {
 	if m.showAll {
 		if len(m.flat) == 0 {
@@ -1605,7 +1658,7 @@ func (m *Model) layout() {
 
 	commentH := 0
 	if m.commenting {
-		commentH = 5 // label + textarea
+		commentH = 7 // label (up to 2 lines) + textarea
 	}
 	diffH := contentH - commentH
 	if diffH < 3 {
@@ -1829,15 +1882,13 @@ func (m Model) View() string {
 		leftInner := m.fileList.View()
 		rightInner := m.diffVP.View()
 		if m.commenting {
-			label := "✎ comment" + anchorHint(m.selectedAnchor()) + "  (enter save · esc cancel)"
-			if m.replyParentID != "" {
-				label = "✎ reply" + anchorHint(m.selectedAnchor()) + "  (enter save · esc cancel)"
+			labelW := m.rightWidth - 4
+			if labelW < 20 {
+				labelW = 40
 			}
-			if m.editingID != "" {
-				label = "✎ edit draft" + anchorHint(m.selectedAnchor()) + "  (enter save · esc cancel)"
-			}
+			label := m.commentEditorLabel(labelW)
 			box := lipgloss.JoinVertical(lipgloss.Left,
-				draftStyle.Render(label),
+				draftStyle.Width(labelW).Render(label),
 				m.comment.View(),
 			)
 			rightInner = lipgloss.JoinVertical(lipgloss.Left, rightInner, box)
@@ -1883,16 +1934,14 @@ func (m Model) View() string {
 	case screenOverview:
 		inner := m.bodyVP.View()
 		if m.commenting {
-			label := "✎ general comment  (enter save · esc cancel)"
-			if m.replyParentID != "" {
-				label = "✎ reply  (enter save · esc cancel)"
+			labelW := m.width - 4
+			if labelW < 20 {
+				labelW = 40
 			}
-			if m.editingID != "" {
-				label = "✎ edit draft  (enter save · esc cancel)"
-			}
+			label := m.commentEditorLabel(labelW)
 			inner = lipgloss.JoinVertical(lipgloss.Left,
 				inner,
-				draftStyle.Render(label),
+				draftStyle.Width(labelW).Render(label),
 				m.comment.View(),
 			)
 		}

@@ -9,7 +9,9 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/muesli/reflow/truncate"
+	"github.com/muesli/reflow/wordwrap"
 	"github.com/vegard/prui/internal/domain"
 )
 
@@ -452,7 +454,7 @@ func paintSplit(h *Highlighter, path string, line domain.DiffLine, th Theme, wid
 	return left + right
 }
 
-// PaintAnnotation renders a quiet annotation under a line.
+// PaintAnnotation renders a quiet annotation under a line, wrapping long bodies.
 func PaintAnnotation(author, body string, draft, selected bool, th Theme, width int) string {
 	prefix := "     └ "
 	fg := th.AnnotationFg
@@ -463,16 +465,65 @@ func PaintAnnotation(author, body string, draft, selected bool, th Theme, width 
 	if selected {
 		prefix = "     ▸ "
 	}
-	label := prefix + author + " · " + strings.ReplaceAll(body, "\n", " ")
+	body = strings.TrimSpace(strings.ReplaceAll(body, "\r\n", "\n"))
+	head := prefix + author + " · "
 	st := lipgloss.NewStyle().Foreground(fg)
 	if selected {
 		st = st.Bold(true).Foreground(th.DraftFg)
 	}
-	if width > 0 {
-		st = st.Width(width).MaxWidth(width)
-		return st.Render(truncate.StringWithTail(label, uint(maxInt(1, width)), "…"))
+	if width <= 0 {
+		return st.Render(head + strings.ReplaceAll(body, "\n", " "))
 	}
-	return st.Render(label)
+
+	headW := runewidth.StringWidth(head)
+	cont := strings.Repeat(" ", minInt(headW, width))
+	bodyWidth := maxInt(8, width-headW)
+	if headW >= width-4 {
+		// Narrow pane: stack author then wrapped body under a short indent.
+		head = prefix + author
+		headW = runewidth.StringWidth(prefix)
+		cont = strings.Repeat(" ", headW) + "  "
+		bodyWidth = maxInt(8, width-runewidth.StringWidth(cont))
+		var b strings.Builder
+		b.WriteString(st.Render(truncate.StringWithTail(head, uint(width), "…")))
+		for _, para := range strings.Split(body, "\n") {
+			wrapped := wordwrap.String(para, bodyWidth)
+			for _, line := range strings.Split(wrapped, "\n") {
+				b.WriteByte('\n')
+				b.WriteString(st.Render(cont + line))
+			}
+		}
+		return b.String()
+	}
+
+	var b strings.Builder
+	paras := strings.Split(body, "\n")
+	first := true
+	for _, para := range paras {
+		wrapped := wordwrap.String(para, bodyWidth)
+		for i, line := range strings.Split(wrapped, "\n") {
+			if !first {
+				b.WriteByte('\n')
+			}
+			first = false
+			if i == 0 && b.Len() == 0 {
+				b.WriteString(st.Render(head + line))
+				continue
+			}
+			b.WriteString(st.Render(cont + line))
+		}
+	}
+	if first {
+		return st.Render(truncate.StringWithTail(head, uint(width), "…"))
+	}
+	return b.String()
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func gutterNum(n int) string {

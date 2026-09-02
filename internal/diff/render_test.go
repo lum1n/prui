@@ -79,3 +79,19 @@ func TestPaintSelectedOverridesAddBg(t *testing.T) {
 		t.Fatalf("selected missing gutter chip color:\n%q", sel)
 	}
 }
+
+func TestPaintAnnotationWraps(t *testing.T) {
+	th := diff.DarkTheme()
+	body := "This is a fairly long review comment that should wrap across multiple lines instead of overflowing the pane width."
+	out := diff.PaintAnnotation("Alice (alice)", body, false, false, th, 40)
+	if !strings.Contains(out, "\n") {
+		t.Fatalf("expected wrapped annotation, got single line:\n%q", out)
+	}
+	if !strings.Contains(out, "Alice") {
+		t.Fatal("missing author")
+	}
+	if strings.Contains(out, "…") && !strings.Contains(out, "overflowing") {
+		// wrapping should preserve words, not hard-truncate the whole comment
+		t.Fatalf("unexpected hard truncate:\n%q", out)
+	}
+}

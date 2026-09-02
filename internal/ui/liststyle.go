@@ -82,6 +82,7 @@ func configureList(l *list.Model, title, singular, plural string) {
 	l.Styles = dimListStyles()
 	l.SetShowStatusBar(false) // we render the count at the bottom ourselves
 	l.SetShowHelp(false)
+	l.SetShowPagination(false)
 	l.SetFilteringEnabled(true)
 	l.SetStatusBarItemName(singular, plural)
 }

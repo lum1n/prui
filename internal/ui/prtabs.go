@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -15,6 +14,9 @@ const (
 	tabMerged
 	prListTabCount
 )
+
+// prTabBarHeight is tabs row + separator; keep in sync with renderPRTabs.
+const prTabBarHeight = 2
 
 func (t prListTab) next() prListTab {
 	return prListTab((int(t) + 1) % int(prListTabCount))
@@ -57,22 +59,76 @@ func (t prListTab) statusNoun() string {
 	}
 }
 
-func renderPRTabs(active prListTab) string {
-	parts := make([]string, 0, prListTabCount)
-	for i := prListTab(0); i < prListTabCount; i++ {
-		label := fmt.Sprintf(" %s ", i.label())
-		if i == active {
-			parts = append(parts, lipgloss.NewStyle().
-				Foreground(listFg).
-				Background(listSelBg).
-				Bold(true).
-				Border(lipgloss.NormalBorder(), false, false, true, false).
-				BorderForeground(listAccent).
-				Render(label))
-		} else {
-			parts = append(parts, mutedStyle.Render(label))
-		}
+func renderPRTabs(active prListTab, width int) string {
+	if width < 24 {
+		width = 24
 	}
-	hint := mutedStyle.Render("  tab/←→ switch")
-	return strings.Join(parts, mutedStyle.Render(" │ ")) + hint
+
+	activeStyle := lipgloss.NewStyle().
+		Foreground(listFg).
+		Background(listSelBg).
+		Bold(true).
+		Padding(0, 1)
+	inactiveStyle := lipgloss.NewStyle().
+		Foreground(listFgDim).
+		Padding(0, 1)
+
+	cells := make([]string, 0, prListTabCount)
+	underLeft := 0
+	underW := 0
+	cursor := 0
+	for i := prListTab(0); i < prListTabCount; i++ {
+		if i > 0 {
+			gap := "  "
+			cells = append(cells, gap)
+			cursor += lipgloss.Width(gap)
+		}
+		var cell string
+		if i == active {
+			cell = activeStyle.Render(i.label())
+			underLeft = cursor
+			underW = lipgloss.Width(cell)
+		} else {
+			cell = inactiveStyle.Render(i.label())
+		}
+		cells = append(cells, cell)
+		cursor += lipgloss.Width(cell)
+	}
+
+	tabs := strings.Join(cells, "")
+	hint := mutedStyle.Render("tab ←→")
+	gap := width - lipgloss.Width(tabs) - lipgloss.Width(hint)
+	var row string
+	switch {
+	case gap > 0:
+		row = tabs + strings.Repeat(" ", gap) + hint
+	default:
+		row = lipgloss.NewStyle().Width(width).MaxWidth(width).Render(tabs)
+	}
+	row = lipgloss.NewStyle().Width(width).MaxWidth(width).Render(row)
+
+	if underW < 2 {
+		underW = 2
+	}
+	if underLeft+underW > width {
+		underW = width - underLeft
+	}
+	if underW < 0 {
+		underW = 0
+	}
+	right := width - underLeft - underW
+	if right < 0 {
+		right = 0
+	}
+	dim := lipgloss.NewStyle().Foreground(listFgDim)
+	acc := lipgloss.NewStyle().Foreground(listAccent)
+	rule := dim.Render(strings.Repeat("─", underLeft)) +
+		acc.Render(strings.Repeat("─", underW)) +
+		dim.Render(strings.Repeat("─", right))
+
+	return lipgloss.JoinVertical(lipgloss.Left, row, rule)
+}
+
+func prListHelpLine() string {
+	return "enter open · tab/←→ tabs · 1–3 jump · / filter · O browser · ? help · q quit"
 }

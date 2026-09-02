@@ -1913,7 +1913,7 @@ func (m *Model) layout() {
 	titleH := 1
 	statusH := 1
 	helpH := 0
-	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenOverview {
+	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenOverview || m.screen == screenPRList {
 		helpH = 1
 	}
 	contentH := m.height - titleH - statusH - helpH
@@ -1921,10 +1921,10 @@ func (m *Model) layout() {
 		contentH = 3
 	}
 	m.contentHeight = contentH
-	// Reserve rows for bottom "N items" footer (+ PR tab bar on the list screen).
+	// Reserve rows for bottom "N items" footer (+ tab bar on the PR list screen).
 	prH := contentH - 1
 	if m.screen == screenPRList {
-		prH = contentH - 2 // tabs + footer
+		prH = contentH - 1 - prTabBarHeight
 	}
 	if prH < 3 {
 		prH = 3
@@ -2177,7 +2177,10 @@ func (m Model) View() string {
 	var body string
 	switch m.screen {
 	case screenPRList:
-		body = lipgloss.JoinVertical(lipgloss.Left, renderPRTabs(m.prTab), listViewWithFooter(m.prList))
+		body = lipgloss.JoinVertical(lipgloss.Left,
+			renderPRTabs(m.prTab, m.width),
+			listViewWithFooter(m.prList),
+		)
 	case screenReview:
 		leftInner := listViewWithFooter(m.fileList)
 		rightInner := m.diffVP.View()
@@ -2256,16 +2259,20 @@ func (m Model) View() string {
 
 	helpH := 0
 	var helpBar string
-	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenOverview {
+	switch m.screen {
+	case screenReview, screenSubmit, screenOverview:
 		helpH = 1
 		helpBar = helpBarStyle.Width(m.width).Render(truncate(m.reviewHelpLine(), m.width))
+	case screenPRList:
+		helpH = 1
+		helpBar = helpBarStyle.Width(m.width).Render(truncate(prListHelpLine(), m.width))
 	}
 
 	contentH := m.height - 2 - helpH // title + status (+ help)
 	if contentH < 1 {
 		contentH = 1
 	}
-	body = lipgloss.NewStyle().Height(contentH).MaxHeight(contentH).Render(body)
+	body = lipgloss.NewStyle().Width(m.width).Height(contentH).MaxHeight(contentH).Render(body)
 	if helpH > 0 {
 		return lipgloss.JoinVertical(lipgloss.Left, title, body, helpBar, statusBar)
 	}

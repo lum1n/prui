@@ -104,6 +104,7 @@ prui pr list owner/repo
 | `r` | Submit review |
 | `[`/`]` | Prev/next hunk |
 | `o` | Show PR URL |
+| `O` | Open PR in browser |
 | `?` | Help |
 | `q` | Back / quit |
 

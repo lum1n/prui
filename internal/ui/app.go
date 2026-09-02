@@ -205,6 +205,7 @@ const defaultHelp = `Keys
   a         toggle this-file / all-files view
   [ ]       prev/next hunk
   o         show PR URL in status
+  O         open PR in browser
   ?         help
   q/esc     back / quit
 
@@ -465,6 +466,19 @@ func (m Model) updatePRList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.errMsg = ""
 				return m, m.loadReview(item.pr.Ref.Number)
 			}
+		case "O":
+			if item, ok := m.prList.SelectedItem().(prItem); ok {
+				if item.pr.URL == "" {
+					m.status = "No PR URL"
+					return m, nil
+				}
+				if err := openBrowser(item.pr.URL); err != nil {
+					m.status = "Open failed: " + err.Error()
+					return m, nil
+				}
+				m.status = "Opened in browser"
+				return m, nil
+			}
 		case "?":
 			m.screen = screenHelp
 			return m, nil
@@ -553,6 +567,17 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.pr != nil {
 				m.status = m.pr.URL
 			}
+			return m, nil
+		case "O":
+			if m.pr == nil || m.pr.URL == "" {
+				m.status = "No PR URL"
+				return m, nil
+			}
+			if err := openBrowser(m.pr.URL); err != nil {
+				m.status = "Open failed: " + err.Error()
+				return m, nil
+			}
+			m.status = "Opened in browser"
 			return m, nil
 		case "r":
 			m.screen = screenSubmit

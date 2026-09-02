@@ -77,6 +77,7 @@ type Model struct {
 
 	prList   list.Model
 	fileList list.Model
+	prTab    prListTab
 	diffVP   viewport.Model
 	comment  textarea.Model
 
@@ -169,6 +170,7 @@ type loadedSummaryMsg struct {
 func NewModel(opts Options) Model {
 	prList := list.New(nil, newPRDelegate(), 0, 0)
 	configureList(&prList, "Pull requests", "PR", "PRs")
+	prList.SetShowTitle(false)
 
 	fileList := list.New(nil, newFileDelegate(), 0, 0)
 	configureList(&fileList, "Files", "file", "files")
@@ -211,9 +213,10 @@ func NewModel(opts Options) Model {
 const defaultHelp = `Keys
   j/k       move
   ctrl+d/u  page down / page up (half screen)
-  tab       switch pane
+  tab       PR list: next tab · review: switch pane
+  ←/→       PR list: switch Open / Drafts / Merged
   enter     open PR / load file
-  c         new comment on line
+  c         new comment on line (not on merged)
   R         reply to selected comment (diff: ▸ target · overview conversation)
   ,/.       prev/next reply target on line
   1-9       jump to reply target #N on line
@@ -240,7 +243,8 @@ Overview: reviews · tab section · j/k · space toggle task · S summarize · R
 Views
   this-file   only the selected path (default)
   all-files   every path in one scroll; file list + section headers track focus
-  overview    status, reviews, tasks, description, summary, conversation (key p)`
+  overview    status, reviews, tasks, description, summary, conversation (key p)
+  merged      view-only: browse diff/overview, no comments or submit`
 
 func (m Model) Init() tea.Cmd {
 	if m.opts.PRNumber > 0 {
@@ -250,9 +254,10 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) loadPRs() tea.Cmd {
+	tab := m.prTab
 	return func() tea.Msg {
 		ctx := context.Background()
-		prs, err := m.opts.Provider.ListPullRequests(ctx, m.opts.Repo, domain.ListOpts{State: "open"})
+		prs, err := m.opts.Provider.ListPullRequests(ctx, m.opts.Repo, domain.ListOpts{State: tab.listState()})
 		if err != nil {
 			return loadedPRsMsg{err: err}
 		}
@@ -281,9 +286,14 @@ func (m Model) loadReview(num int) tea.Cmd {
 		}
 		comments, _ := m.opts.Provider.ListComments(ctx, ref)
 		tasks, _ := m.opts.Provider.ListTasks(ctx, ref)
-		session, _ := review.Load(m.opts.Host.Name, ref)
-		if remote, err := m.opts.Provider.StartReview(ctx, ref); err == nil && remote != nil {
-			session.Draft.RemoteID = remote.RemoteID
+		var session *review.Session
+		if pr.ViewOnly() {
+			session = &review.Session{HostName: m.opts.Host.Name, Repo: ref.Repo, Number: ref.Number}
+		} else {
+			session, _ = review.Load(m.opts.Host.Name, ref)
+			if remote, err := m.opts.Provider.StartReview(ctx, ref); err == nil && remote != nil {
+				session.Draft.RemoteID = remote.RemoteID
+			}
 		}
 		return loadedReviewMsg{pr: pr, files: files, comments: comments, tasks: tasks, session: session}
 	}
@@ -351,7 +361,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = prItem{pr: p}
 		}
 		m.prList.SetItems(items)
-		m.status = fmt.Sprintf("%d open PRs", len(msg.prs))
+		m.status = fmt.Sprintf("%d %s", len(msg.prs), m.prTab.statusNoun())
 		return m, nil
 
 	case loadedReviewMsg:
@@ -383,6 +393,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.summaryGen++
 		m.refreshFileList()
 		m.status = fmt.Sprintf("PR #%d — %s", m.pr.Ref.Number, m.pr.Title)
+		if m.pr.ViewOnly() {
+			m.status += " · view only"
+		}
 		if badge := formatReviewBadge(m.pr.Reviews); badge != "" {
 			m.status += " · " + badge
 		}
@@ -570,9 +583,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) updatePRList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		filtering := m.prList.FilterState() == list.Filtering
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "tab", "right", "l":
+			if filtering {
+				break
+			}
+			m.prTab = m.prTab.next()
+			m.loading = true
+			m.errMsg = ""
+			m.status = "Loading " + m.prTab.statusNoun() + "…"
+			return m, m.loadPRs()
+		case "shift+tab", "left", "h":
+			if filtering {
+				break
+			}
+			m.prTab = m.prTab.prev()
+			m.loading = true
+			m.errMsg = ""
+			m.status = "Loading " + m.prTab.statusNoun() + "…"
+			return m, m.loadPRs()
+		case "1":
+			if filtering {
+				break
+			}
+			return m.switchPRTab(tabOpen)
+		case "2":
+			if filtering {
+				break
+			}
+			return m.switchPRTab(tabDrafts)
+		case "3":
+			if filtering {
+				break
+			}
+			return m.switchPRTab(tabMerged)
 		case "enter":
 			if item, ok := m.prList.SelectedItem().(prItem); ok {
 				m.loading = true
@@ -593,6 +640,9 @@ func (m Model) updatePRList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case "?":
+			if filtering {
+				break
+			}
 			m.screen = screenHelp
 			return m, nil
 		}
@@ -600,6 +650,26 @@ func (m Model) updatePRList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.prList, cmd = m.prList.Update(msg)
 	return m, cmd
+}
+
+func (m Model) switchPRTab(tab prListTab) (tea.Model, tea.Cmd) {
+	if m.prTab == tab {
+		return m, nil
+	}
+	m.prTab = tab
+	m.loading = true
+	m.errMsg = ""
+	m.status = "Loading " + m.prTab.statusNoun() + "…"
+	return m, m.loadPRs()
+}
+
+func (m Model) reviewReadOnly() bool {
+	return m.pr != nil && m.pr.ViewOnly()
+}
+
+func (m Model) rejectWrite(action string) (tea.Model, tea.Cmd) {
+	m.status = action + " unavailable on " + strings.ToLower(m.pr.State) + " PRs"
+	return m, nil
 }
 
 func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -728,16 +798,25 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Opened in browser"
 			return m, nil
 		case "r":
+			if m.reviewReadOnly() {
+				return m.rejectWrite("Submit")
+			}
 			m.screen = screenSubmit
 			m.submitIdx = 0
 			return m, nil
 		case "c":
+			if m.reviewReadOnly() {
+				return m.rejectWrite("Comment")
+			}
 			if !m.cursorCommentable() {
 				m.status = "Select a commentable line"
 				return m, nil
 			}
 			return m, m.beginComment("")
 		case "R":
+			if m.reviewReadOnly() {
+				return m.rejectWrite("Reply")
+			}
 			m.syncThreadTarget()
 			parent := m.threadTargetID
 			if parent == "" {
@@ -762,6 +841,9 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "e":
+			if m.reviewReadOnly() {
+				return m.rejectWrite("Edit")
+			}
 			d := m.draftOnCursor()
 			if d == nil {
 				m.status = "No draft on this line"
@@ -769,6 +851,9 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.beginComment(d.ID)
 		case "x":
+			if m.reviewReadOnly() {
+				return m.rejectWrite("Delete")
+			}
 			d := m.draftOnCursor()
 			if d == nil {
 				m.status = "No draft on this line"
@@ -1215,6 +1300,9 @@ func (m Model) updateOverview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.overviewSec != sectionTasks {
 				return m, nil
 			}
+			if m.reviewReadOnly() {
+				return m.rejectWrite("Task updates")
+			}
 			if len(m.tasks) == 0 {
 				m.status = "No tasks"
 				return m, nil
@@ -1222,9 +1310,15 @@ func (m Model) updateOverview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			return m, m.toggleSelectedTask()
 		case "c":
+			if m.reviewReadOnly() {
+				return m.rejectWrite("Comment")
+			}
 			m.overviewSec = sectionConversation
 			return m, m.beginGeneralComment()
 		case "R":
+			if m.reviewReadOnly() {
+				return m.rejectWrite("Reply")
+			}
 			m.overviewSec = sectionConversation
 			if len(entries) == 0 {
 				m.status = "No comment to reply to"
@@ -1244,6 +1338,9 @@ func (m Model) updateOverview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.beginReply(parent, true)
 		case "e":
+			if m.reviewReadOnly() {
+				return m.rejectWrite("Edit")
+			}
 			m.overviewSec = sectionConversation
 			if len(entries) == 0 {
 				m.status = "No drafts"
@@ -1259,6 +1356,9 @@ func (m Model) updateOverview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.beginComment(e.ID)
 		case "x":
+			if m.reviewReadOnly() {
+				return m.rejectWrite("Delete")
+			}
 			m.overviewSec = sectionConversation
 			if len(entries) == 0 {
 				m.status = "No drafts"
@@ -1413,6 +1513,10 @@ func (m Model) updateInlineComment(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateSubmit(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.reviewReadOnly() {
+		m.screen = screenReview
+		return m.rejectWrite("Submit")
+	}
 	actions := m.availableActions()
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -1817,8 +1921,11 @@ func (m *Model) layout() {
 		contentH = 3
 	}
 	m.contentHeight = contentH
-	// Reserve one row for the bottom "N items" footer outside the list.
+	// Reserve rows for bottom "N items" footer (+ PR tab bar on the list screen).
 	prH := contentH - 1
+	if m.screen == screenPRList {
+		prH = contentH - 2 // tabs + footer
+	}
 	if prH < 3 {
 		prH = 3
 	}
@@ -2070,7 +2177,7 @@ func (m Model) View() string {
 	var body string
 	switch m.screen {
 	case screenPRList:
-		body = listViewWithFooter(m.prList)
+		body = lipgloss.JoinVertical(lipgloss.Left, renderPRTabs(m.prTab), listViewWithFooter(m.prList))
 	case screenReview:
 		leftInner := listViewWithFooter(m.fileList)
 		rightInner := m.diffVP.View()
@@ -2183,6 +2290,9 @@ func (m Model) reviewHelpLine() string {
 			sec = "conversation"
 		}
 		open := openTaskCount(m.tasks)
+		if m.reviewReadOnly() {
+			return fmt.Sprintf("overview · %s · view only · tab section · j/k · S summarize · %d open tasks · p/esc back", sec, open)
+		}
 		return fmt.Sprintf("overview · %s · tab section · j/k · space toggle · S summarize · R reply · c add · %d open tasks · p/esc back", sec, open)
 	}
 	if m.commenting {
@@ -2208,6 +2318,12 @@ func (m Model) reviewHelpLine() string {
 	}
 	open := openTaskCount(m.tasks)
 	nConv := len(conversationComments(m.comments))
+	if m.reviewReadOnly() {
+		return fmt.Sprintf(
+			"tab pane(%s) · j/k · ^d/^u · [/] hunk · y yank · a %s · d %s · p overview(%d/%d) · S summarize · O open · view only · ? · q",
+			pane, view, layout, open, nConv,
+		)
+	}
 	return fmt.Sprintf(
 		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · ,/.|# target · R reply · e edit · x del · v range · y yank · a %s · d %s · p overview(%d/%d) · S summarize · r submit · O open · ? · q",
 		pane, view, layout, open, nConv,

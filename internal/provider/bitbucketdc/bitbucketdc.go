@@ -97,11 +97,18 @@ func (c *Client) prPath(ref domain.PRRef) string {
 }
 
 func (c *Client) ListPullRequests(ctx context.Context, ref domain.RepoRef, opts domain.ListOpts) ([]domain.PullRequest, error) {
-	state := opts.State
-	if state == "" {
+	mode := domain.NormalizeListState(opts.State)
+	state := "OPEN"
+	switch mode {
+	case "merged":
+		state = "MERGED"
+	case "closed":
+		state = "DECLINED"
+	case "all":
+		state = "ALL"
+	case "open", "draft":
 		state = "OPEN"
 	}
-	state = strings.ToUpper(state)
 	u := fmt.Sprintf("%s/pull-requests?state=%s&limit=%d", c.repoPath(ref), url.QueryEscape(state), limit(opts.Limit))
 	var page struct {
 		Values []dcPR `json:"values"`
@@ -112,6 +119,16 @@ func (c *Client) ListPullRequests(ctx context.Context, ref domain.RepoRef, opts 
 	out := make([]domain.PullRequest, 0, len(page.Values))
 	for _, p := range page.Values {
 		pr := p.toDomain(ref, c.host.BaseURL)
+		switch mode {
+		case "open":
+			if pr.Draft {
+				continue
+			}
+		case "draft":
+			if !pr.Draft {
+				continue
+			}
+		}
 		if st, err := c.reviewStatusFromPR(ctx, p); err == nil {
 			pr.Reviews = st
 		}

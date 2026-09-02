@@ -5,6 +5,7 @@ Terminal UI for reviewing pull requests on **GitHub** (cloud + Enterprise) and *
 ## Features
 
 - List and open PRs from the current git remote or an explicit target
+- PR list tabs: **Open**, **Drafts**, **Merged** (merged is view-only)
 - Syntax-highlighted unified diffs (Chroma; pierre-inspired line annotations)
 - Draft inline / threaded comments, yank plain code, submit reviews
 - Multi-host config (on-prem URLs, optional custom CA)
@@ -184,7 +185,9 @@ prui version
 |-----|--------|
 | `j`/`k` | Move |
 | `Ctrl+d`/`Ctrl+u` | Page down / up (half screen) |
-| `Tab` | Files ↔ diff |
+| `Tab` | PR list: next tab · Files ↔ diff |
+| `←`/`→` | PR list: Open / Drafts / Merged |
+| `1`/`2`/`3` | PR list: jump to Open / Drafts / Merged |
 | `Enter` | Open PR / load file |
 | `c` | New comment on line |
 | `p` | PR overview (status, reviews, tasks, description, summary, conversation) |
@@ -204,7 +207,7 @@ prui version
 | `?` | Help |
 | `q` | Back / quit |
 
-Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): shows **Reviews** (who approved / requested changes / your decision), then `tab` through Tasks / Description / Summary / Conversation. Submit (`r`) offers Comment, Approve, and Request changes (GitHub event, Bitbucket Cloud request-changes, Bitbucket DC NEEDS_WORK). Yank (`y`): source text only for the cursor line or `v` range.
+Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): shows **Reviews** (who approved / requested changes / your decision), then `tab` through Tasks / Description / Summary / Conversation. Submit (`r`) offers Comment, Approve, and Request changes (GitHub event, Bitbucket Cloud request-changes, Bitbucket DC NEEDS_WORK). Yank (`y`): source text only for the cursor line or `v` range. **Merged** PRs are view-only (no comments, task toggles, or submit).
 
 ## Architecture
 

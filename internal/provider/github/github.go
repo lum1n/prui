@@ -72,12 +72,18 @@ func New(host domain.Host, cred auth.Credentials, httpClient *http.Client) (*Cli
 func (c *Client) Kind() domain.HostKind { return domain.HostGitHub }
 
 func (c *Client) ListPullRequests(ctx context.Context, ref domain.RepoRef, opts domain.ListOpts) ([]domain.PullRequest, error) {
-	state := opts.State
-	if state == "" {
-		state = "open"
+	mode := domain.NormalizeListState(opts.State)
+	apiState := "open"
+	switch mode {
+	case "merged", "closed":
+		apiState = "closed"
+	case "all":
+		apiState = "all"
+	case "open", "draft":
+		apiState = "open"
 	}
 	listOpts := &github.PullRequestListOptions{
-		State: state,
+		State: apiState,
 		ListOptions: github.ListOptions{
 			PerPage: perPage(opts.Limit),
 		},
@@ -91,7 +97,27 @@ func (c *Client) ListPullRequests(ctx context.Context, ref domain.RepoRef, opts 
 		if opts.Author != "" && p.GetUser().GetLogin() != opts.Author {
 			continue
 		}
-		out = append(out, mapPR(ref, p))
+		pr := mapPR(ref, p)
+		switch mode {
+		case "open":
+			if p.GetDraft() {
+				continue
+			}
+		case "draft":
+			if !p.GetDraft() {
+				continue
+			}
+		case "merged":
+			if !p.GetMerged() {
+				continue
+			}
+			pr.State = "merged"
+		case "closed":
+			if p.GetMerged() {
+				continue
+			}
+		}
+		out = append(out, pr)
 	}
 	return out, nil
 }
@@ -454,12 +480,16 @@ func (c *Client) GetReviewStatus(ctx context.Context, ref domain.PRRef) (domain.
 
 func mapPR(repo domain.RepoRef, p *github.PullRequest) domain.PullRequest {
 	tasks := parseChecklistTasks(p.GetBody())
+	state := p.GetState()
+	if p.GetMerged() {
+		state = "merged"
+	}
 	return domain.PullRequest{
 		Ref:       domain.PRRef{Repo: repo, Number: p.GetNumber()},
 		Title:     p.GetTitle(),
 		Body:      p.GetBody(),
 		Author:    domain.FormatAuthor(p.GetUser().GetLogin(), p.GetUser().GetName()),
-		State:     p.GetState(),
+		State:     state,
 		Draft:     p.GetDraft(),
 		Blocked:   anyOpenRequired(tasks),
 		URL:       p.GetHTMLURL(),

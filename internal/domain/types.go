@@ -245,8 +245,36 @@ type DraftReview struct {
 
 // ListOpts filters PR listings.
 type ListOpts struct {
-	State    string // open, closed, merged, all
+	State    string // open (ready, non-draft), draft, merged, closed, all
 	Author   string
 	Reviewer string // "me" means authenticated user when supported
 	Limit    int
+}
+
+// NormalizeListState maps UI/API aliases to open|draft|merged|closed|all.
+func NormalizeListState(state string) string {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "", "open", "ready":
+		return "open"
+	case "draft", "drafts":
+		return "draft"
+	case "merged":
+		return "merged"
+	case "closed", "declined", "superseded":
+		return "closed"
+	case "all":
+		return "all"
+	default:
+		return strings.ToLower(strings.TrimSpace(state))
+	}
+}
+
+// ViewOnly reports whether the PR should be browsed without review mutations.
+func (p PullRequest) ViewOnly() bool {
+	switch strings.ToLower(p.State) {
+	case "merged", "closed", "declined", "superseded":
+		return true
+	default:
+		return false
+	}
 }

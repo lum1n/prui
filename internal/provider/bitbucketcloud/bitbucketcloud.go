@@ -98,11 +98,18 @@ func (c *Client) prURL(ref domain.PRRef, suffix string) string {
 }
 
 func (c *Client) ListPullRequests(ctx context.Context, ref domain.RepoRef, opts domain.ListOpts) ([]domain.PullRequest, error) {
-	state := opts.State
-	if state == "" {
+	mode := domain.NormalizeListState(opts.State)
+	state := "OPEN"
+	switch mode {
+	case "merged":
+		state = "MERGED"
+	case "closed":
+		state = "DECLINED"
+	case "all":
+		state = "ALL"
+	case "open", "draft":
 		state = "OPEN"
 	}
-	state = strings.ToUpper(state)
 	q := url.Values{}
 	q.Set("state", state)
 	pagelen := 50
@@ -124,6 +131,16 @@ func (c *Client) ListPullRequests(ctx context.Context, ref domain.RepoRef, opts 
 			continue
 		}
 		pr := p.toDomain(ref)
+		switch mode {
+		case "open":
+			if pr.Draft {
+				continue
+			}
+		case "draft":
+			if !pr.Draft {
+				continue
+			}
+		}
 		viewer, aliases := c.resolveViewer(ctx)
 		pr.Reviews = reviewStatusFromBBParticipants(p.Participants, viewer, aliases...)
 		out = append(out, pr)

@@ -106,12 +106,17 @@ type Model struct {
 	loading    bool
 	bodyVP     viewport.Model
 	splitDiff  bool
+	showAll    bool // all files in one scrollable view
 
-	commenting   bool
-	activePath   string // last requested / shown file path
-	leftWidth    int
-	rightWidth   int
+	commenting    bool
+	activePath    string // last requested / shown file path
+	leftWidth     int
+	rightWidth    int
 	contentHeight int
+
+	diffCache map[string]*domain.FileDiff
+	flat      []flatRow
+	allGen    int // bumps to cancel in-flight all-file loads
 }
 
 type loadedPRsMsg struct {
@@ -129,6 +134,11 @@ type loadedDiffMsg struct {
 	path string
 	fd   *domain.FileDiff
 	err  error
+}
+type loadedAllDiffsMsg struct {
+	gen   int
+	diffs map[string]*domain.FileDiff
+	err   error
 }
 type submitDoneMsg struct{ err error }
 
@@ -171,6 +181,8 @@ func NewModel(opts Options) Model {
 		helpText:   defaultHelp,
 		loading:    true,
 		splitDiff:  opts.Config != nil && opts.Config.UI.Diff == "split",
+		showAll:    opts.Config != nil && opts.Config.UI.Files == "all",
+		diffCache:  map[string]*domain.FileDiff{},
 	}
 	if opts.PRNumber > 0 {
 		m.screen = screenReview
@@ -186,13 +198,18 @@ const defaultHelp = `Keys
   v         toggle range select
   r         submit review
   p         PR description (markdown)
-  d         toggle unified/split diff
+  d         toggle unified/split layout
+  a         toggle this-file / all-files view
   [ ]       prev/next hunk
   o         show PR URL in status
   ?         help
   q/esc     back / quit
 
-Inline comment: type on the selected line, enter to save, esc to cancel`
+Inline comment: type on the selected line, enter to save, esc to cancel
+
+Views
+  this-file   only the selected path (default)
+  all-files   every path in one scroll; file list + section headers track focus`
 
 func (m Model) Init() tea.Cmd {
 	if m.opts.PRNumber > 0 {
@@ -245,6 +262,33 @@ func (m Model) loadDiff(path string) tea.Cmd {
 	}
 }
 
+func (m Model) loadAllDiffs(gen int) tea.Cmd {
+	if m.pr == nil || len(m.files) == 0 {
+		return nil
+	}
+	num := m.pr.Ref.Number
+	repo := m.opts.Repo
+	prov := m.opts.Provider
+	files := append([]domain.FileChange(nil), m.files...)
+	return func() tea.Msg {
+		ctx := context.Background()
+		ref := domain.PRRef{Repo: repo, Number: num}
+		out := make(map[string]*domain.FileDiff, len(files))
+		var firstErr error
+		for _, f := range files {
+			fd, err := prov.GetFileDiff(ctx, ref, f.Path)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			out[f.Path] = fd
+		}
+		return loadedAllDiffsMsg{gen: gen, diffs: out, err: firstErr}
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -279,19 +323,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.comments = msg.comments
 		m.session = msg.session
 		m.screen = screenReview
+		m.diffCache = map[string]*domain.FileDiff{}
+		m.flat = nil
 		m.refreshFileList()
 		m.status = fmt.Sprintf("PR #%d — %s", m.pr.Ref.Number, m.pr.Title)
-		if len(m.files) > 0 {
-			m.activePath = m.files[0].Path
-			m.loading = true
-			return m, m.loadDiff(m.files[0].Path)
+		if len(m.files) == 0 {
+			return m, nil
 		}
-		return m, nil
+		m.activePath = m.files[0].Path
+		m.loading = true
+		if m.showAll {
+			m.allGen++
+			return m, m.loadAllDiffs(m.allGen)
+		}
+		return m, m.loadDiff(m.files[0].Path)
 
 	case loadedDiffMsg:
 		m.loading = false
-		// Ignore stale responses from a previous selection.
-		if msg.path != "" && m.activePath != "" && msg.path != m.activePath {
+		// Ignore stale responses from a previous selection (single-file mode).
+		if !m.showAll && msg.path != "" && m.activePath != "" && msg.path != m.activePath {
 			return m, nil
 		}
 		if msg.err != nil {
@@ -299,16 +349,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.errMsg = ""
+		if msg.fd != nil && msg.path != "" {
+			m.diffCache[msg.path] = msg.fd
+		}
 		m.fileDiff = msg.fd
 		m.activePath = msg.path
+		if m.showAll {
+			m.rebuildFlat()
+			m.cursorLine = m.jumpFlatToPath(msg.path)
+			m.syncFileList(msg.path)
+		} else {
+			m.cursorLine = firstCommentable(msg.fd)
+		}
 		if msg.fd != nil && len(msg.fd.Lines) == 0 {
 			m.status = msg.path + " (no textual diff — binary or empty)"
+		} else if m.showAll {
+			m.status = fmt.Sprintf("all files · %s", msg.path)
 		} else {
 			m.status = msg.path
 		}
-		m.cursorLine = firstCommentable(msg.fd)
 		m.rangeStart = -1
 		m.commenting = false
+		m.layout()
+		m.renderDiff()
+		return m, nil
+
+	case loadedAllDiffsMsg:
+		if msg.gen != m.allGen || !m.showAll {
+			return m, nil
+		}
+		m.loading = false
+		if msg.err != nil && len(msg.diffs) == 0 {
+			m.errMsg = msg.err.Error()
+			return m, nil
+		}
+		m.errMsg = ""
+		for p, fd := range msg.diffs {
+			m.diffCache[p] = fd
+		}
+		m.rebuildFlat()
+		path := m.activePath
+		if path == "" && len(m.files) > 0 {
+			path = m.files[0].Path
+		}
+		m.cursorLine = m.jumpFlatToPath(path)
+		m.syncFileList(path)
+		m.status = fmt.Sprintf("all files · %d/%d loaded", len(msg.diffs), len(m.files))
+		if msg.err != nil {
+			m.status += " · some failed"
+		}
+		m.rangeStart = -1
 		m.layout()
 		m.renderDiff()
 		return m, nil
@@ -421,11 +511,39 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.splitDiff = !m.splitDiff
 			m.renderDiff()
 			if m.splitDiff {
-				m.status = "Split diff"
+				m.status = "Split layout"
 			} else {
-				m.status = "Unified diff"
+				m.status = "Unified layout"
 			}
 			return m, nil
+		case "a":
+			m.showAll = !m.showAll
+			m.rangeStart = -1
+			m.commenting = false
+			if m.showAll {
+				m.status = "All-files view"
+				m.loading = true
+				m.allGen++
+				return m, m.loadAllDiffs(m.allGen)
+			}
+			m.status = "This-file view"
+			m.flat = nil
+			path := m.activePath
+			if path == "" && len(m.files) > 0 {
+				path = m.files[0].Path
+			}
+			if path == "" {
+				return m, nil
+			}
+			if fd, ok := m.diffCache[path]; ok {
+				m.fileDiff = fd
+				m.cursorLine = firstCommentable(fd)
+				m.layout()
+				m.renderDiff()
+				return m, nil
+			}
+			m.loading = true
+			return m, m.selectFile(path)
 		case "o":
 			if m.pr != nil {
 				m.status = m.pr.URL
@@ -436,7 +554,7 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.submitIdx = 0
 			return m, nil
 		case "c":
-			if m.fileDiff == nil || m.cursorLine < 0 || m.cursorLine >= len(m.fileDiff.Lines) || !diff.Commentable(m.fileDiff.Lines[m.cursorLine]) {
+			if !m.cursorCommentable() {
 				m.status = "Select a commentable line"
 				return m, nil
 			}
@@ -459,7 +577,7 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.pane == paneDiff && m.fileDiff != nil {
+		if m.pane == paneDiff && (m.fileDiff != nil || (m.showAll && len(m.flat) > 0)) {
 			switch msg.String() {
 			case "j", "down":
 				m.moveCursor(1)
@@ -474,11 +592,21 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.jumpHunk(-1)
 				return m, nil
 			case "g":
-				m.cursorLine = firstCommentable(m.fileDiff)
+				if m.showAll {
+					m.cursorLine = 0
+					m.moveFlatCursor(0)
+				} else {
+					m.cursorLine = firstCommentable(m.fileDiff)
+				}
 				m.renderDiff()
 				return m, nil
 			case "G":
-				m.cursorLine = lastCommentable(m.fileDiff)
+				if m.showAll && len(m.flat) > 0 {
+					m.cursorLine = len(m.flat) - 1
+					m.syncFileList(m.flatPath(m.cursorLine))
+				} else {
+					m.cursorLine = lastCommentable(m.fileDiff)
+				}
 				m.renderDiff()
 				return m, nil
 			}
@@ -511,6 +639,21 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) selectFile(path string) tea.Cmd {
 	if path == "" {
 		return nil
+	}
+	if m.showAll {
+		if _, ok := m.diffCache[path]; ok {
+			m.rebuildFlat()
+			m.cursorLine = m.jumpFlatToPath(path)
+			m.syncFileList(path)
+			m.pane = paneDiff
+			m.status = fmt.Sprintf("all files · %s", path)
+			m.renderDiff()
+			return nil
+		}
+		m.activePath = path
+		m.loading = true
+		m.status = "Loading " + path + "…"
+		return m.loadDiff(path)
 	}
 	if path == m.activePath && m.fileDiff != nil && m.errMsg == "" && !m.loading {
 		return nil
@@ -617,29 +760,64 @@ func (m Model) availableActions() []domain.ReviewAction {
 	return acts
 }
 
-func (m *Model) selectedAnchor() *domain.Anchor {
+func (m *Model) cursorRow() (flatRow, bool) {
+	if m.showAll {
+		if m.cursorLine < 0 || m.cursorLine >= len(m.flat) {
+			return flatRow{}, false
+		}
+		return m.flat[m.cursorLine], true
+	}
 	if m.fileDiff == nil || m.cursorLine < 0 || m.cursorLine >= len(m.fileDiff.Lines) {
+		return flatRow{}, false
+	}
+	return flatRow{fd: m.fileDiff, path: m.fileDiff.Path, line: m.cursorLine}, true
+}
+
+func (m *Model) cursorCommentable() bool {
+	row, ok := m.cursorRow()
+	if !ok || row.header || row.fd == nil {
+		return false
+	}
+	if row.line < 0 || row.line >= len(row.fd.Lines) {
+		return false
+	}
+	return diff.Commentable(row.fd.Lines[row.line])
+}
+
+func (m *Model) selectedAnchor() *domain.Anchor {
+	row, ok := m.cursorRow()
+	if !ok || row.header || row.fd == nil || row.line < 0 || row.line >= len(row.fd.Lines) {
 		return nil
 	}
-	line := m.fileDiff.Lines[m.cursorLine]
+	line := row.fd.Lines[row.line]
 	a := line.Anchor
-	if m.rangeStart >= 0 && m.rangeStart != m.cursorLine {
+	if !m.showAll && m.rangeStart >= 0 && m.rangeStart != m.cursorLine && m.fileDiff != nil {
 		start, end := m.rangeStart, m.cursorLine
 		if start > end {
 			start, end = end, start
 		}
-		sa := m.fileDiff.Lines[start].Anchor
-		ea := m.fileDiff.Lines[end].Anchor
-		a.Line = sa.Line
-		a.EndLine = ea.Line
-		if a.EndLine < a.Line {
-			a.Line, a.EndLine = a.EndLine, a.Line
+		if start >= 0 && end < len(m.fileDiff.Lines) {
+			sa := m.fileDiff.Lines[start].Anchor
+			ea := m.fileDiff.Lines[end].Anchor
+			a.Line = sa.Line
+			a.EndLine = ea.Line
+			if a.EndLine < a.Line {
+				a.Line, a.EndLine = a.EndLine, a.Line
+			}
 		}
 	}
 	return &a
 }
 
 func (m *Model) moveCursor(delta int) {
+	if m.showAll {
+		if len(m.flat) == 0 {
+			return
+		}
+		m.moveFlatCursor(delta)
+		m.renderDiff()
+		return
+	}
 	if m.fileDiff == nil || len(m.fileDiff.Lines) == 0 {
 		return
 	}
@@ -654,7 +832,27 @@ func (m *Model) moveCursor(delta int) {
 }
 
 func (m *Model) jumpHunk(dir int) {
-	if m.fileDiff == nil {
+	if m.showAll {
+		if len(m.flat) == 0 {
+			return
+		}
+		start := m.cursorLine
+		for i := start + dir; i >= 0 && i < len(m.flat); i += dir {
+			row := m.flat[i]
+			if row.header || row.fd == nil {
+				continue
+			}
+			ln := row.fd.Lines[row.line]
+			if strings.HasPrefix(ln.Text, "@@") {
+				m.cursorLine = i
+				m.syncFileList(row.path)
+				m.renderDiff()
+				return
+			}
+		}
+		return
+	}
+	if m.fileDiff == nil || m.cursorLine < 0 || m.cursorLine >= len(m.fileDiff.Lines) {
 		return
 	}
 	cur := m.fileDiff.Lines[m.cursorLine].HunkIndex
@@ -763,10 +961,6 @@ func renderMarkdown(src string, width int) string {
 }
 
 func (m *Model) renderDiff() {
-	if m.fileDiff == nil {
-		m.diffVP.SetContent("  select a file")
-		return
-	}
 	width := m.diffVP.Width
 	if width <= 0 {
 		width = 80
@@ -774,6 +968,15 @@ func (m *Model) renderDiff() {
 	th := diff.ThemeFor("dark")
 	if m.opts.Config != nil {
 		th = diff.ThemeFor(m.opts.Config.UI.Theme)
+	}
+
+	if m.showAll {
+		m.renderFlatDiff(th, width)
+		return
+	}
+	if m.fileDiff == nil {
+		m.diffVP.SetContent("  select a file")
+		return
 	}
 
 	var b strings.Builder
@@ -796,43 +999,98 @@ func (m *Model) renderDiff() {
 		}
 	}
 	for i := start; i < end; i++ {
-		ln := m.fileDiff.Lines[i]
-		sel := i == m.cursorLine
-		if m.rangeStart >= 0 {
-			lo, hi := m.rangeStart, m.cursorLine
-			if lo > hi {
-				lo, hi = hi, lo
-			}
-			if i >= lo && i <= hi {
-				sel = true
-			}
-		}
-		opt := diff.Options{Theme: th, Width: width, Selected: sel, Split: m.splitDiff}
-		b.WriteString(diff.Paint(m.hl, m.fileDiff.Path, ln, opt))
-		b.WriteByte('\n')
-		for _, c := range m.comments {
-			if c.Anchor != nil && c.Path == m.fileDiff.Path && c.Anchor.Line == ln.Anchor.Line && c.Anchor.Side == ln.Anchor.Side {
-				b.WriteString(diff.PaintAnnotation(c.Author, c.Body, false, th, width) + "\n")
-			}
-		}
-		if m.session != nil {
-			for _, d := range m.session.Draft.Comments {
-				if d.Anchor != nil && d.Path == m.fileDiff.Path && d.Anchor.Line == ln.Anchor.Line {
-					b.WriteString(diff.PaintAnnotation("you", d.Body, true, th, width) + "\n")
-				}
-			}
-		}
+		m.writeDiffLine(&b, m.fileDiff, m.fileDiff.Lines[i], i == m.cursorLine || m.lineInRange(i), th, width)
 	}
 	if end < len(m.fileDiff.Lines) {
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ··· %d lines below ···", len(m.fileDiff.Lines)-end)) + "\n")
 	}
 	m.diffVP.SetContent(b.String())
 	m.diffVP.GotoTop()
-	// +1 for file header
+	// File header is 3 lines (rules + title).
 	if start == 0 {
-		offset := m.cursorLine + 1 - m.diffVP.Height/2
+		offset := m.cursorLine + 3 - m.diffVP.Height/2
 		if offset > 0 {
 			m.diffVP.LineDown(offset)
+		}
+	}
+}
+
+func (m *Model) renderFlatDiff(th diff.Theme, width int) {
+	if len(m.flat) == 0 {
+		m.diffVP.SetContent("  loading files…")
+		return
+	}
+	var b strings.Builder
+	start, end := 0, len(m.flat)
+	const margin = 200
+	if len(m.flat) > margin*2 {
+		start = m.cursorLine - margin
+		if start < 0 {
+			start = 0
+		}
+		end = m.cursorLine + margin
+		if end > len(m.flat) {
+			end = len(m.flat)
+		}
+		if start > 0 {
+			b.WriteString(mutedStyle.Render(fmt.Sprintf("  ··· %d rows above ···", start)) + "\n")
+		}
+	}
+	for i := start; i < end; i++ {
+		row := m.flat[i]
+		sel := i == m.cursorLine || m.lineInRange(i)
+		if row.header {
+			hdr := diff.PaintFileHeader(row.path, row.status, th, width)
+			if sel {
+				hdr = lipgloss.NewStyle().Background(th.SelectedBg).Render(hdr)
+			}
+			b.WriteString(hdr)
+			b.WriteByte('\n')
+			continue
+		}
+		if row.fd == nil || row.line < 0 || row.line >= len(row.fd.Lines) {
+			continue
+		}
+		m.writeDiffLine(&b, row.fd, row.fd.Lines[row.line], sel, th, width)
+	}
+	if end < len(m.flat) {
+		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ··· %d rows below ···", len(m.flat)-end)) + "\n")
+	}
+	m.diffVP.SetContent(b.String())
+	m.diffVP.GotoTop()
+	if start == 0 {
+		offset := m.cursorLine - m.diffVP.Height/2
+		if offset > 0 {
+			m.diffVP.LineDown(offset)
+		}
+	}
+}
+
+func (m *Model) lineInRange(i int) bool {
+	if m.rangeStart < 0 {
+		return false
+	}
+	lo, hi := m.rangeStart, m.cursorLine
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	return i >= lo && i <= hi
+}
+
+func (m *Model) writeDiffLine(b *strings.Builder, fd *domain.FileDiff, ln domain.DiffLine, sel bool, th diff.Theme, width int) {
+	opt := diff.Options{Theme: th, Width: width, Selected: sel, Split: m.splitDiff}
+	b.WriteString(diff.Paint(m.hl, fd.Path, ln, opt))
+	b.WriteByte('\n')
+	for _, c := range m.comments {
+		if c.Anchor != nil && c.Path == fd.Path && c.Anchor.Line == ln.Anchor.Line && c.Anchor.Side == ln.Anchor.Side {
+			b.WriteString(diff.PaintAnnotation(c.Author, c.Body, false, th, width) + "\n")
+		}
+	}
+	if m.session != nil {
+		for _, d := range m.session.Draft.Comments {
+			if d.Anchor != nil && d.Path == fd.Path && d.Anchor.Line == ln.Anchor.Line {
+				b.WriteString(diff.PaintAnnotation("you", d.Body, true, th, width) + "\n")
+			}
 		}
 	}
 }

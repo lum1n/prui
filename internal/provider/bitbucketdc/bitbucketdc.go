@@ -412,7 +412,21 @@ type dcDiffResponse struct {
 }
 
 type dcDiff struct {
-	Hunks []dcHunk `json:"hunks"`
+	Source      *dcPath  `json:"source"`
+	Destination *dcPath  `json:"destination"`
+	Hunks       []dcHunk `json:"hunks"`
+}
+
+func (d dcDiff) path() string {
+	if d.Destination != nil {
+		if s := d.Destination.String(); s != "" {
+			return s
+		}
+	}
+	if d.Source != nil {
+		return d.Source.String()
+	}
+	return ""
 }
 
 type dcHunk struct {
@@ -434,12 +448,24 @@ type dcLine struct {
 	Truncated   bool    `json:"truncated"`
 }
 
-func dcDiffToUnified(path string, raw dcDiffResponse) string {
+func dcDiffToUnified(wantPath string, raw dcDiffResponse) string {
 	var b strings.Builder
-	b.WriteString("diff --git a/" + path + " b/" + path + "\n")
-	b.WriteString("--- a/" + path + "\n")
-	b.WriteString("+++ b/" + path + "\n")
+	wroteHeader := false
 	for _, d := range raw.Diffs {
+		p := d.path()
+		if p == "" {
+			p = wantPath
+		}
+		// Single-file requests must not leak other paths from a whole-PR response.
+		if wantPath != "" && p != wantPath {
+			continue
+		}
+		if !wroteHeader {
+			b.WriteString("diff --git a/" + p + " b/" + p + "\n")
+			b.WriteString("--- a/" + p + "\n")
+			b.WriteString("+++ b/" + p + "\n")
+			wroteHeader = true
+		}
 		for _, h := range d.Hunks {
 			oldStart := h.SourceLine.Int()
 			newStart := h.DestinationLine.Int()

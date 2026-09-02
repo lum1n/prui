@@ -38,6 +38,7 @@ type Defaults struct {
 // UIConfig controls TUI presentation.
 type UIConfig struct {
 	Diff  string `mapstructure:"diff"`  // unified | split
+	Files string `mapstructure:"files"` // selected | all
 	Theme string `mapstructure:"theme"` // dark | light
 }
 
@@ -49,6 +50,7 @@ func Load(cfgFile string) (*Config, error) {
 	v.AutomaticEnv()
 
 	v.SetDefault("ui.diff", "unified")
+	v.SetDefault("ui.files", "selected")
 	v.SetDefault("ui.theme", "dark")
 
 	if cfgFile != "" {
@@ -80,6 +82,9 @@ func Load(cfgFile string) (*Config, error) {
 	}
 	if cfg.UI.Diff == "" {
 		cfg.UI.Diff = "unified"
+	}
+	if cfg.UI.Files == "" {
+		cfg.UI.Files = "selected"
 	}
 	if cfg.UI.Theme == "" {
 		cfg.UI.Theme = "dark"

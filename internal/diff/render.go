@@ -172,7 +172,7 @@ func IsHunkHeader(line domain.DiffLine) bool {
 	return strings.HasPrefix(line.Text, "@@")
 }
 
-// PaintFileHeader renders a compact path strip.
+// PaintFileHeader renders a named file section strip (pierre-style).
 func PaintFileHeader(path string, status domain.FileStatus, th Theme, width int) string {
 	mark := "±"
 	switch status {
@@ -183,16 +183,19 @@ func PaintFileHeader(path string, status domain.FileStatus, th Theme, width int)
 	case domain.FileRenamed:
 		mark = "→"
 	}
-	label := fmt.Sprintf(" %s %s ", mark, path)
+	if width <= 0 {
+		width = 80
+	}
+	rule := lipgloss.NewStyle().Foreground(th.SepFg).Render(strings.Repeat("─", width))
+	label := fmt.Sprintf(" %s  %s ", mark, path)
 	st := lipgloss.NewStyle().
 		Foreground(th.HeaderFg).
 		Background(th.HeaderBg).
-		Bold(true)
-	if width > 0 {
-		st = st.Width(width).MaxWidth(width)
-		return st.Render(truncate.StringWithTail(label, uint(maxInt(1, width)), "…"))
-	}
-	return st.Render(label)
+		Bold(true).
+		Width(width).
+		MaxWidth(width)
+	title := st.Render(truncate.StringWithTail(label, uint(width), "…"))
+	return rule + "\n" + title + "\n" + rule
 }
 
 // PaintDiffLine paints one unified-diff row.

@@ -43,6 +43,36 @@ func TestDCDiffLineIsContent(t *testing.T) {
 	}
 }
 
+func TestDCDiffFiltersOtherPaths(t *testing.T) {
+	var raw dcDiffResponse
+	payload := `{
+  "diffs": [
+    {
+      "destination": {"toString": "keep.go"},
+      "hunks": [{"sourceLine": 1, "destinationLine": 1, "segments": [
+        {"type": "ADDED", "lines": [{"destination": 1, "line": "keep"}]}
+      ]}]
+    },
+    {
+      "destination": {"toString": "other.go"},
+      "hunks": [{"sourceLine": 1, "destinationLine": 1, "segments": [
+        {"type": "ADDED", "lines": [{"destination": 1, "line": "leak"}]}
+      ]}]
+    }
+  ]
+}`
+	if err := json.Unmarshal([]byte(payload), &raw); err != nil {
+		t.Fatal(err)
+	}
+	unified := dcDiffToUnified("keep.go", raw)
+	if strings.Contains(unified, "leak") {
+		t.Fatalf("leaked other file:\n%s", unified)
+	}
+	if !strings.Contains(unified, "+keep") {
+		t.Fatalf("missing wanted file:\n%s", unified)
+	}
+}
+
 func TestEncodeDiffPath(t *testing.T) {
 	got := encodeDiffPath("src/foo bar.js")
 	if got != "src/foo%20bar%2Ejs" {

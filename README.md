@@ -59,7 +59,8 @@ defaults:
   host: work-bb
 
 ui:
-  diff: unified
+  diff: unified   # unified | split
+  files: selected # selected | all
   theme: dark
 ```
 

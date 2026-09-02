@@ -35,6 +35,9 @@ type AIProvider struct {
 	BaseURL     string `mapstructure:"base_url"`     // Claude: Anthropic API override
 	GitHubHost  string `mapstructure:"github_host"`  // Copilot: name of hosts[] entry
 	Binary      string `mapstructure:"binary"`       // CLI path override (codex/opencode)
+	// OAuthClientID enables native device login for this Copilot API host.
+	OAuthClientID     string `mapstructure:"oauth_client_id"`
+	OAuthClientSecret string `mapstructure:"oauth_client_secret"`
 }
 
 // HostConfig is one forge endpoint in YAML.
@@ -48,6 +51,9 @@ type HostConfig struct {
 	MatchHosts []string `mapstructure:"match_hosts"` // SSH / alternate hostnames
 	Username   string   `mapstructure:"username"`
 	CACert     string   `mapstructure:"ca_cert"`
+	// OAuthClientID enables native device login (`prui auth login`) without wrapping gh.
+	OAuthClientID     string `mapstructure:"oauth_client_id"`
+	OAuthClientSecret string `mapstructure:"oauth_client_secret"`
 }
 
 // Defaults holds default host selection.

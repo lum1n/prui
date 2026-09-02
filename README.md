@@ -80,7 +80,18 @@ ai:
     # codex / opencode use local CLIs (codex exec / opencode run)
 ```
 
-Auth is never stored in the config file. For on-prem hosts without API tokens, set `cookie_env` to an env var that holds a browser session `Cookie` header value (DevTools → Network → copy request Cookie). A leading `Cookie:` prefix is stripped if present.
+Auth is never stored in the config file. Prefer:
+
+```bash
+prui auth login --hostname ghe.example.com   # device/browser via gh; token saved for prui
+prui auth status
+```
+
+Tokens are saved under `~/.config/prui/credentials.json` (mode 0600). You do **not** need to `export GHE_TOKEN`. Resolution order: env cookie/token → stored login → `gh auth token`.
+
+For a native device flow without `gh`, create an OAuth App on the GHE instance and pass `--client-id` (or set `oauth_client_id` on the host / Copilot provider).
+
+Cookie auth is still supported for forges that block PATs:
 
 ```bash
 # Example: paste session cookies from the browser
@@ -89,9 +100,29 @@ export BB_COOKIE='JSESSIONID=...; BITBUCKETSESSIONID=...'
 prui auth status
 ```
 
-When both `cookie_env` and `token_env` are configured, a set cookie wins. For `github.com` without `cookie_env`, prui still falls back to `gh auth token`.
+When both `cookie_env` and `token_env` are configured, a set cookie wins.
 
 If your git SSH hostname differs from `base_url` (common on Bitbucket DC), add it under `match_hosts`. With a single configured host (or `defaults.host` set), prui falls back to that host when the remote hostname is not listed.
+
+### Copilot while on Bitbucket
+
+You do not need a GHE entry under `hosts`. Minimal AI config:
+
+```yaml
+ai:
+  default: copilot-ghe
+  providers:
+    copilot-ghe:
+      kind: copilot
+      model: gpt-4.1
+      api_url: https://ghe.example.com/api/v3
+```
+
+```bash
+prui auth login --hostname ghe.example.com
+```
+
+Then `S` in review uses that stored token.
 
 ## Usage
 

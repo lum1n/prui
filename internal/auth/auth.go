@@ -15,6 +15,7 @@ type Credentials struct {
 	Token    string
 	Cookie   string // raw Cookie header value for session auth
 	Username string
+	Source   string // env | store | gh | cookie
 }
 
 // HasAuth reports whether any usable credential is present.
@@ -22,14 +23,15 @@ func (c Credentials) HasAuth() bool {
 	return c.Token != "" || c.Cookie != ""
 }
 
-// Resolve loads credentials from cookie_env and/or token_env.
-// Cookie auth is preferred when cookie_env is configured and set (typical for GHE / Bitbucket Server).
+// Resolve loads credentials from cookie_env, token_env, stored login, or gh.
+// Order: cookie (if set) → token_env → ~/.config/prui/credentials.json → gh auth token.
 func Resolve(host domain.Host) (Credentials, error) {
 	cred := Credentials{Username: host.Username}
 
 	if host.CookieEnv != "" {
 		if v := strings.TrimSpace(os.Getenv(host.CookieEnv)); v != "" {
 			cred.Cookie = normalizeCookie(v)
+			cred.Source = "cookie"
 			return cred, nil
 		}
 	}
@@ -47,16 +49,24 @@ func Resolve(host domain.Host) (Credentials, error) {
 	if envName != "" {
 		if v := strings.TrimSpace(os.Getenv(envName)); v != "" {
 			cred.Token = v
+			cred.Source = "env"
 			return cred, nil
 		}
 	}
 
-	if host.Kind == domain.HostGitHub && isGitHubDotCom(host) && host.CookieEnv == "" {
-		token, err := ghAuthToken()
-		if err == nil && token != "" {
-			cred.Token = token
+	if host.Kind == domain.HostGitHub {
+		hn := githubHostname(host)
+		if tok, err := LoadToken(hn); err == nil && tok != "" {
+			cred.Token = tok
+			cred.Source = "store"
 			return cred, nil
 		}
+		if tok, err := ghAuthTokenHostname(hn); err == nil && tok != "" {
+			cred.Token = tok
+			cred.Source = "gh"
+			return cred, nil
+		}
+		return cred, fmt.Errorf("auth not set for %q (%s); run: prui auth login --hostname %s", host.Name, hn, hn)
 	}
 
 	switch {
@@ -81,13 +91,39 @@ func normalizeCookie(v string) string {
 }
 
 func isGitHubDotCom(host domain.Host) bool {
-	base := strings.ToLower(host.BaseURL)
-	api := strings.ToLower(host.APIURL)
-	return strings.Contains(base, "github.com") || api == "" || strings.Contains(api, "api.github.com")
+	return githubHostname(host) == "github.com" || githubHostname(host) == "api.github.com"
+}
+
+func githubHostname(host domain.Host) string {
+	for _, cand := range []string{host.BaseURL, host.APIURL} {
+		h := HostnameOf(cand)
+		if h == "" {
+			continue
+		}
+		if h == "api.github.com" {
+			return "github.com"
+		}
+		// Strip GHE API path hosts that are still the enterprise hostname.
+		return h
+	}
+	return "github.com"
 }
 
 func ghAuthToken() (string, error) {
-	cmd := exec.Command("gh", "auth", "token")
+	return ghAuthTokenHostname("github.com")
+}
+
+func ghAuthTokenHostname(hostname string) (string, error) {
+	hostname = normalizeHostname(hostname)
+	if hostname == "" || hostname == "github.com" || hostname == "api.github.com" {
+		cmd := exec.Command("gh", "auth", "token")
+		out, err := cmd.Output()
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	cmd := exec.Command("gh", "auth", "token", "--hostname", hostname)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -108,7 +144,11 @@ func StatusLine(host domain.Host) string {
 	if user == "" {
 		user = "(token)"
 	}
-	return fmt.Sprintf("%s (%s): ok token %s as %s", host.Name, host.Kind, mask(cred.Token), user)
+	src := cred.Source
+	if src == "" {
+		src = "token"
+	}
+	return fmt.Sprintf("%s (%s): ok %s %s as %s", host.Name, host.Kind, src, mask(cred.Token), user)
 }
 
 func mask(s string) string {

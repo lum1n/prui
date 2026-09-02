@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
+
 	"github.com/spf13/cobra"
 	"github.com/vegard/prui/internal/auth"
 	"github.com/vegard/prui/internal/config"
@@ -16,6 +18,9 @@ var (
 	cfgFile  string
 	hostName string
 	appCfg   *config.Config
+
+	authHostname string
+	authClientID string
 )
 
 var rootCmd = &cobra.Command{
@@ -42,6 +47,73 @@ var authStatusCmd = &cobra.Command{
 		for _, h := range appCfg.Hosts {
 			fmt.Println(auth.StatusLine(h.ToDomain()))
 		}
+		for name, p := range appCfg.AI.Providers {
+			if !strings.EqualFold(p.Kind, "copilot") {
+				continue
+			}
+			api := strings.TrimSpace(p.APIURL)
+			if api == "" && p.GitHubHost != "" {
+				if hc, ok := appCfg.FindHostConfig(p.GitHubHost); ok {
+					api = hc.APIURL
+				}
+			}
+			if api == "" {
+				continue
+			}
+			h := domain.Host{
+				Name:     "ai:" + name,
+				Kind:     domain.HostGitHub,
+				APIURL:   strings.TrimRight(api, "/"),
+				BaseURL:  strings.TrimRight(api, "/"),
+				TokenEnv: p.TokenEnv,
+			}
+			fmt.Println(auth.StatusLine(h))
+		}
+		return nil
+	},
+}
+
+var authLoginCmd = &cobra.Command{
+	Use:   "login",
+	Short: "Log in with device code (stores token; no env export needed)",
+	Long: `Log in to GitHub.com or GitHub Enterprise and save a token for prui.
+
+By default this wraps "gh auth login" (device/browser), then saves the token
+under ~/.config/prui/credentials.json so you do not need to export GHE_TOKEN.
+
+For a fully native device flow (no gh), set oauth_client_id on the host or
+pass --client-id from an OAuth App on that GHE.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		opts, err := resolveLoginOpts()
+		if err != nil {
+			return err
+		}
+		return auth.Login(cmd.Context(), opts)
+	},
+}
+
+var authLogoutCmd = &cobra.Command{
+	Use:   "logout",
+	Short: "Remove a stored prui token for a hostname",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		hn := strings.TrimSpace(authHostname)
+		if hostName != "" {
+			h, err := appCfg.FindHost(hostName)
+			if err != nil {
+				return err
+			}
+			hn = auth.HostnameOf(h.BaseURL)
+			if hn == "" {
+				hn = auth.HostnameOf(h.APIURL)
+			}
+		}
+		if hn == "" {
+			return fmt.Errorf("pass --hostname or --host")
+		}
+		if err := auth.DeleteToken(hn); err != nil {
+			return err
+		}
+		fmt.Printf("Removed stored token for %s\n", auth.HostnameOf(hn))
 		return nil
 	},
 }
@@ -80,7 +152,11 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default ~/.config/prui/config.yaml)")
 	rootCmd.PersistentFlags().StringVar(&hostName, "host", "", "host name from config")
 
-	authCmd.AddCommand(authStatusCmd)
+	authLoginCmd.Flags().StringVar(&authHostname, "hostname", "", "forge hostname (e.g. ghe.example.com)")
+	authLoginCmd.Flags().StringVar(&authClientID, "client-id", "", "OAuth App client id for native device flow")
+	authLogoutCmd.Flags().StringVar(&authHostname, "hostname", "", "forge hostname")
+
+	authCmd.AddCommand(authStatusCmd, authLoginCmd, authLogoutCmd)
 	prCmd.AddCommand(prListCmd)
 	rootCmd.AddCommand(authCmd, prCmd)
 }
@@ -99,6 +175,82 @@ func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+func resolveLoginOpts() (auth.LoginOptions, error) {
+	opts := auth.LoginOptions{
+		Hostname: authHostname,
+		ClientID: authClientID,
+	}
+	if hostName != "" {
+		hc, ok := appCfg.FindHostConfig(hostName)
+		if !ok {
+			return opts, fmt.Errorf("host %q not found", hostName)
+		}
+		h := hc.ToDomain()
+		opts.Hostname = auth.HostnameOf(h.BaseURL)
+		if opts.Hostname == "" {
+			opts.Hostname = auth.HostnameOf(h.APIURL)
+		}
+		opts.BaseURL = h.BaseURL
+		if opts.BaseURL == "" {
+			opts.BaseURL = "https://" + opts.Hostname
+		}
+		if opts.ClientID == "" {
+			opts.ClientID = hc.OAuthClientID
+		}
+		if opts.ClientSecret == "" {
+			opts.ClientSecret = hc.OAuthClientSecret
+		}
+	}
+	if opts.Hostname == "" {
+		for _, p := range appCfg.AI.Providers {
+			if !strings.EqualFold(p.Kind, "copilot") {
+				continue
+			}
+			if p.GitHubHost != "" {
+				if hc, ok := appCfg.FindHostConfig(p.GitHubHost); ok {
+					opts.Hostname = auth.HostnameOf(hc.BaseURL)
+					if opts.Hostname == "" {
+						opts.Hostname = auth.HostnameOf(hc.APIURL)
+					}
+					opts.BaseURL = hc.BaseURL
+					if opts.ClientID == "" {
+						opts.ClientID = firstNonEmpty(authClientID, p.OAuthClientID, hc.OAuthClientID)
+					}
+					if opts.ClientSecret == "" {
+						opts.ClientSecret = firstNonEmpty(p.OAuthClientSecret, hc.OAuthClientSecret)
+					}
+					break
+				}
+			}
+			if api := strings.TrimSpace(p.APIURL); api != "" {
+				opts.Hostname = auth.HostnameOf(api)
+				opts.BaseURL = "https://" + opts.Hostname
+				if opts.ClientID == "" {
+					opts.ClientID = firstNonEmpty(authClientID, p.OAuthClientID)
+				}
+				opts.ClientSecret = firstNonEmpty(opts.ClientSecret, p.OAuthClientSecret)
+				break
+			}
+		}
+	}
+	if opts.Hostname == "" {
+		return opts, fmt.Errorf("pass --hostname ghe.example.com (or --host name from config)")
+	}
+	if opts.ClientID == "" && authClientID != "" {
+		opts.ClientID = authClientID
+	}
+	return opts, nil
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 func runTUI(cmd *cobra.Command, args []string) error {
@@ -122,7 +274,6 @@ func runTUI(cmd *cobra.Command, args []string) error {
 func resolveTarget(args []string) (gitremote.Resolved, error) {
 	if len(args) == 1 {
 		raw := args[0]
-		// allow --host override after parse
 		r, err := gitremote.ParseTarget(raw, appCfg)
 		if err != nil {
 			return gitremote.Resolved{}, err
@@ -148,7 +299,6 @@ func resolveTarget(args []string) (gitremote.Resolved, error) {
 		}
 		r.Host = h
 	} else if r.Host.Name == "" || (hostName == "" && appCfg.Defaults.Host != "") {
-		// Prefer matching config host already done in FromGitRemote; allow default override only when remote unmatched name
 		_ = hostName
 	}
 	return r, nil

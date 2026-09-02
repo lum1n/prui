@@ -92,11 +92,21 @@ func resolveGitHubCred(opts Options) (apiURL string, cred auth.Credentials, host
 		if api == "" {
 			api = "https://api.github.com"
 		}
+		base := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
+		if base == "" {
+			// Derive web base from API (…/api/v3 → origin).
+			base = api
+			base = strings.TrimSuffix(base, "/api/v3")
+			base = strings.TrimSuffix(base, "/api")
+			if strings.Contains(api, "api.github.com") {
+				base = "https://github.com"
+			}
+		}
 		host = domain.Host{
 			Name:     "copilot",
 			Kind:     domain.HostGitHub,
 			APIURL:   api,
-			BaseURL:  api,
+			BaseURL:  base,
 			TokenEnv: p.TokenEnv,
 		}
 	} else if host.Kind != domain.HostGitHub {

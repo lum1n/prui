@@ -1,7 +1,9 @@
 package bitbucketdc
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -310,21 +312,66 @@ type dcChange struct {
 	SrcPath struct{ ToString string `json:"toString"` } `json:"srcPath"`
 }
 
+// flexInt unmarshals JSON numbers or numeric strings.
+type flexInt int
+
+func (f *flexInt) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		*f = 0
+		return nil
+	}
+	if b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			*f = 0
+			return nil
+		}
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return fmt.Errorf("flexInt: %w", err)
+		}
+		*f = flexInt(n)
+		return nil
+	}
+	var n int
+	if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	*f = flexInt(n)
+	return nil
+}
+
+func (f flexInt) Int() int { return int(f) }
+
 type dcDiffResponse struct {
-	Diffs []struct {
-		Hunks []struct {
-			Segments []struct {
-				Type  string `json:"type"`
-				Lines []struct {
-					Line   int    `json:"line"`
-					Source int    `json:"source"`
-					Text   string `json:"text"`
-				} `json:"lines"`
-			} `json:"segments"`
-			SourceLine int `json:"sourceLine"`
-			DestinationLine int `json:"destinationLine"`
-		} `json:"hunks"`
-	} `json:"diffs"`
+	Diffs []dcDiff `json:"diffs"`
+}
+
+type dcDiff struct {
+	Hunks []dcHunk `json:"hunks"`
+}
+
+type dcHunk struct {
+	SourceLine      flexInt     `json:"sourceLine"`
+	DestinationLine flexInt     `json:"destinationLine"`
+	Segments        []dcSegment `json:"segments"`
+}
+
+type dcSegment struct {
+	Type  string   `json:"type"`
+	Lines []dcLine `json:"lines"`
+}
+
+type dcLine struct {
+	Line        flexInt `json:"line"`
+	Source      flexInt `json:"source"`
+	Destination flexInt `json:"destination"`
+	Text        string  `json:"text"`
 }
 
 func dcDiffToUnified(path string, raw dcDiffResponse) string {
@@ -334,8 +381,8 @@ func dcDiffToUnified(path string, raw dcDiffResponse) string {
 	b.WriteString("+++ b/" + path + "\n")
 	for _, d := range raw.Diffs {
 		for _, h := range d.Hunks {
-			oldStart := h.SourceLine
-			newStart := h.DestinationLine
+			oldStart := h.SourceLine.Int()
+			newStart := h.DestinationLine.Int()
 			if oldStart == 0 {
 				oldStart = 1
 			}

@@ -45,8 +45,26 @@ func TestDCDiffLineIsContent(t *testing.T) {
 
 func TestEncodeDiffPath(t *testing.T) {
 	got := encodeDiffPath("src/foo bar.js")
-	if got != "src/foo%20bar.js" {
+	if got != "src/foo%20bar%2Ejs" {
 		t.Fatalf("%q", got)
+	}
+	dot := encodeDiffPath("envs/.env.development")
+	if dot != "envs/%2Eenv%2Edevelopment" {
+		t.Fatalf("dotfile path: %q", dot)
+	}
+	q := encodeDiffQueryPath("envs/.env.development")
+	if q != "envs%2F%2Eenv%2Edevelopment" {
+		t.Fatalf("query path: %q", q)
+	}
+	urls := diffURLs("http://bb/rest/api/1.0/projects/P/repos/r/pull-requests/1", "envs/.env.development")
+	if len(urls) < 2 {
+		t.Fatalf("want fallbacks, got %v", urls)
+	}
+	if !strings.Contains(urls[0], "path=envs%2F%2Eenv%2Edevelopment") {
+		t.Fatalf("query-first: %v", urls[0])
+	}
+	if !strings.Contains(urls[1], "/diff/envs/%2Eenv%2Edevelopment") {
+		t.Fatalf("path form: %v", urls[1])
 	}
 }
 

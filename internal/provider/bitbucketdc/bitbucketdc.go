@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -150,30 +151,57 @@ func (c *Client) ListFiles(ctx context.Context, ref domain.PRRef) ([]domain.File
 }
 
 func (c *Client) GetFileDiff(ctx context.Context, ref domain.PRRef, path string) (*domain.FileDiff, error) {
-	// Prefer path-in-URL form: /diff/{path}?contextLines=…
-	u := fmt.Sprintf("%s/diff/%s?contextLines=5", c.prPath(ref), encodeDiffPath(path))
 	var raw dcDiffResponse
-	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, u, c.headers(), nil, &raw); err != nil {
-		// Fallback: query parameter form used by some DC versions.
-		u2 := fmt.Sprintf("%s/diff?path=%s&contextLines=5", c.prPath(ref), url.QueryEscape(path))
-		if _, err2 := httputil.DoJSON(ctx, c.http, http.MethodGet, u2, c.headers(), nil, &raw); err2 != nil {
-			return nil, err
+	var errs []error
+
+	// Try candidates in order. Dotfiles (.env) must percent-encode "." as %2E —
+	// PathEscape leaves dots alone, and many proxies reset connections on "/.env".
+	for _, u := range diffURLs(c.prPath(ref), path) {
+		if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, u, c.headers(), nil, &raw); err != nil {
+			errs = append(errs, err)
+			continue
 		}
+		unified := dcDiffToUnified(path, raw)
+		if strings.TrimSpace(unified) == "" || !strings.Contains(unified, "@@") {
+			return &domain.FileDiff{Path: path, Status: domain.FileModified, Raw: unified}, nil
+		}
+		return diff.ParseUnified(path, unified)
 	}
-	unified := dcDiffToUnified(path, raw)
-	if strings.TrimSpace(unified) == "" || !strings.Contains(unified, "@@") {
-		return &domain.FileDiff{Path: path, Status: domain.FileModified, Raw: unified}, nil
+	return nil, fmt.Errorf("diff %s: %w", path, errors.Join(errs...))
+}
+
+func diffURLs(prBase, path string) []string {
+	q := encodeDiffQueryPath(path)
+	p := encodeDiffPath(path)
+	out := []string{
+		fmt.Sprintf("%s/diff?path=%s&contextLines=5", prBase, q),
+		fmt.Sprintf("%s/diff/%s?contextLines=5", prBase, p),
 	}
-	return diff.ParseUnified(path, unified)
+	// Also try unencoded query form for older DC versions.
+	plain := url.QueryEscape(path)
+	if plain != q {
+		out = append(out, fmt.Sprintf("%s/diff?path=%s&contextLines=5", prBase, plain))
+	}
+	return out
 }
 
 // encodeDiffPath keeps slashes so Bitbucket's {path:.*} matcher works.
+// Leading/embedded "." become %2E so names like .env survive proxies and routing.
 func encodeDiffPath(path string) string {
 	parts := strings.Split(path, "/")
 	for i, p := range parts {
-		parts[i] = url.PathEscape(p)
+		parts[i] = encodePathSegment(p)
 	}
 	return strings.Join(parts, "/")
+}
+
+func encodeDiffQueryPath(path string) string {
+	// QueryEscape turns "/" into %2F but leaves "."; force-encode dots.
+	return strings.ReplaceAll(url.QueryEscape(path), ".", "%2E")
+}
+
+func encodePathSegment(p string) string {
+	return strings.ReplaceAll(url.PathEscape(p), ".", "%2E")
 }
 
 func (c *Client) ListComments(ctx context.Context, ref domain.PRRef) ([]domain.Comment, error) {

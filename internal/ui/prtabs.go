@@ -128,3 +128,7 @@ func renderPRTabs(active prListTab, width int) string {
 
 	return lipgloss.JoinVertical(lipgloss.Left, row, rule)
 }
+
+func prListHelpLine() string {
+	return "enter open · tab/←→ · 1–3 jump · / filter · O browser · ? · q"
+}

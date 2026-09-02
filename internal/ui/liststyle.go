@@ -231,25 +231,27 @@ func fileStatusGlyph(st domain.FileStatus) (string, lipgloss.Style) {
 
 // listViewWithFooter renders the list and a bottom "N items" line.
 func listViewWithFooter(l list.Model) string {
+	footer := lipgloss.NewStyle().Padding(0, 1).Render(mutedStyle.Render(listCountLabel(l)))
+	return lipgloss.JoinVertical(lipgloss.Left, l.View(), footer)
+}
+
+func listCountLabel(l list.Model) string {
 	n := len(l.VisibleItems())
 	singular, plural := l.StatusBarItemName()
 	name := plural
 	if n == 1 {
 		name = singular
 	}
-	var footer string
 	switch {
 	case len(l.Items()) == 0:
-		footer = mutedStyle.Render("No " + plural)
+		return "No " + plural
 	case l.FilterState() == list.Filtering && n == 0:
-		footer = mutedStyle.Render("Nothing matched")
+		return "Nothing matched"
 	default:
 		text := fmt.Sprintf("%d %s", n, name)
 		if filtered := len(l.Items()) - n; filtered > 0 {
 			text += fmt.Sprintf(" · %d filtered", filtered)
 		}
-		footer = mutedStyle.Render(text)
+		return text
 	}
-	footer = lipgloss.NewStyle().Padding(0, 1).Render(footer)
-	return lipgloss.JoinVertical(lipgloss.Left, l.View(), footer)
 }

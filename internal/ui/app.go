@@ -1917,7 +1917,7 @@ func (m *Model) layout() {
 	titleH := 1
 	statusH := 1
 	helpH := 0
-	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenOverview {
+	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenOverview || m.screen == screenPRList {
 		helpH = 1
 	}
 	contentH := m.height - titleH - statusH - helpH
@@ -1925,10 +1925,10 @@ func (m *Model) layout() {
 		contentH = 3
 	}
 	m.contentHeight = contentH
-	// Reserve rows for bottom "N items" footer (+ tab bar on the PR list screen).
-	prH := contentH - 1
+	// Reserve rows for tab bar on the PR list screen.
+	prH := contentH
 	if m.screen == screenPRList {
-		prH = contentH - 1 - prTabBarHeight
+		prH = contentH - prTabBarHeight
 	}
 	if prH < 3 {
 		prH = 3
@@ -2183,7 +2183,7 @@ func (m Model) View() string {
 	case screenPRList:
 		body = lipgloss.JoinVertical(lipgloss.Left,
 			renderPRTabs(m.prTab, m.width),
-			listViewWithFooter(m.prList),
+			m.prList.View(),
 		)
 	case screenReview:
 		leftInner := listViewWithFooter(m.fileList)
@@ -2207,13 +2207,18 @@ func (m Model) View() string {
 		if rw == 0 {
 			rw = m.width - lw
 		}
+		// Pin panel height so help/status below always keep their rows.
+		panelH := m.contentHeight
+		if panelH < 3 {
+			panelH = 3
+		}
 		var left, right string
 		if m.pane == paneFiles && !m.commenting {
-			left = focusedPanel.Width(lw).Render(leftInner)
-			right = panel.Width(rw).Render(rightInner)
+			left = focusedPanel.Width(lw).Height(panelH).MaxHeight(panelH).Render(leftInner)
+			right = panel.Width(rw).Height(panelH).MaxHeight(panelH).Render(rightInner)
 		} else {
-			left = panel.Width(lw).Render(leftInner)
-			right = focusedPanel.Width(rw).Render(rightInner)
+			left = panel.Width(lw).Height(panelH).MaxHeight(panelH).Render(leftInner)
+			right = focusedPanel.Width(rw).Height(panelH).MaxHeight(panelH).Render(rightInner)
 		}
 		body = lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	case screenSubmit:
@@ -2258,26 +2263,37 @@ func (m Model) View() string {
 	status := m.status
 	if m.errMsg != "" {
 		status = errorStyle.Render(m.errMsg)
+	} else if status == "" && m.screen == screenPRList {
+		status = listCountLabel(m.prList)
 	}
 	statusBar := statusStyle.Width(m.width).Render(truncate(status, m.width))
 
 	helpH := 0
 	var helpBar string
-	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenOverview {
+	switch m.screen {
+	case screenReview, screenSubmit, screenOverview:
 		helpH = 1
 		helpBar = helpBarStyle.Width(m.width).Render(truncate(m.reviewHelpLine(), m.width))
+	case screenPRList:
+		helpH = 1
+		helpBar = helpBarStyle.Width(m.width).Render(truncate(prListHelpLine(), m.width))
 	}
 
-	contentH := m.height - 2 - helpH // title + status (+ help)
+	// Title + help + status are fixed chrome; body fills the rest.
+	chrome := 1 + 1 + helpH // title + status (+ help)
+	contentH := m.height - chrome
 	if contentH < 1 {
 		contentH = 1
 	}
 	// Do not set Width here — it reflows JoinHorizontal panels and destroys columns.
 	body = lipgloss.NewStyle().Height(contentH).MaxHeight(contentH).Render(body)
+
+	parts := []string{title, body}
 	if helpH > 0 {
-		return lipgloss.JoinVertical(lipgloss.Left, title, body, helpBar, statusBar)
+		parts = append(parts, helpBar)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, title, body, statusBar)
+	parts = append(parts, statusBar)
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m Model) reviewHelpLine() string {
@@ -2342,8 +2358,8 @@ var (
 	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#c8a35a"))
 	mutedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
 	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#e06c75"))
-	statusStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#abb2bf")).Background(lipgloss.Color("#1a1d23"))
-	helpBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	statusStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#abb2bf"))
+	helpBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#8b919a"))
 	panel        = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#2e3440"))
 	focusedPanel = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#c8a35a"))
 	draftStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#c8a35a"))

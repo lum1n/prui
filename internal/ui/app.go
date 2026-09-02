@@ -193,6 +193,7 @@ func NewModel(opts Options) Model {
 
 const defaultHelp = `Keys
   j/k       move
+  ctrl+d/u  page down / page up (half screen)
   tab       switch pane
   enter     open PR / load file
   c         new comment on line
@@ -627,6 +628,12 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "k", "up":
 				m.moveCursor(-1)
 				return m, nil
+			case "ctrl+d", "pgdown":
+				m.pageCursor(1)
+				return m, nil
+			case "ctrl+u", "pgup":
+				m.pageCursor(-1)
+				return m, nil
 			case "]":
 				m.jumpHunk(1)
 				return m, nil
@@ -911,6 +918,44 @@ func (m *Model) moveCursor(delta int) {
 		if diff.Commentable(m.fileDiff.Lines[m.cursorLine]) || strings.HasPrefix(m.fileDiff.Lines[m.cursorLine].Text, "@@") {
 			break
 		}
+	}
+	m.renderDiff()
+}
+
+// pageCursor jumps by half the viewport height (vim ctrl+d / ctrl+u).
+func (m *Model) pageCursor(dir int) {
+	step := m.diffVP.Height / 2
+	if step < 1 {
+		step = 10
+	}
+	delta := dir * step
+	if m.showAll {
+		if len(m.flat) == 0 {
+			return
+		}
+		prevPath := m.flatPath(m.cursorLine)
+		m.cursorLine += delta
+		if m.cursorLine < 0 {
+			m.cursorLine = 0
+		}
+		if m.cursorLine >= len(m.flat) {
+			m.cursorLine = len(m.flat) - 1
+		}
+		if path := m.flatPath(m.cursorLine); path != "" && path != prevPath {
+			m.syncFileList(path)
+		}
+		m.renderDiff()
+		return
+	}
+	if m.fileDiff == nil || len(m.fileDiff.Lines) == 0 {
+		return
+	}
+	m.cursorLine += delta
+	if m.cursorLine < 0 {
+		m.cursorLine = 0
+	}
+	if m.cursorLine >= len(m.fileDiff.Lines) {
+		m.cursorLine = len(m.fileDiff.Lines) - 1
 	}
 	m.renderDiff()
 }

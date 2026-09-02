@@ -95,6 +95,7 @@ prui pr list owner/repo
 | Key | Action |
 |-----|--------|
 | `j`/`k` | Move |
+| `Ctrl+d`/`Ctrl+u` | Page down / up (half screen) |
 | `Tab` | Files ↔ diff |
 | `Enter` | Open PR / load file |
 | `c` | New comment on line |

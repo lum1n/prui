@@ -99,7 +99,9 @@ prui pr list owner/repo
 | `Tab` | Files ↔ diff |
 | `Enter` | Open PR / load file |
 | `c` | New comment on line |
-| `R` | Reply to comment on line / selected conversation comment |
+| `R` | Reply to selected comment (diff target / conversation cursor) |
+| `,` / `.` | Prev/next reply target on the cursor line |
+| `1`–`9` | Jump to reply target `#N` on the cursor line |
 | `e` | Edit draft on line |
 | `x` | Delete draft on line |
 | `v` | Range select |
@@ -111,7 +113,7 @@ prui pr list owner/repo
 | `?` | Help |
 | `q` | Back / quit |
 
-Comment editor: `enter`/`ctrl+s` save, `esc` cancel. `e`/`x` edit or delete the draft on the cursor line. In conversation, `j`/`k` select a comment and `R` replies in that thread.
+Comment editor: `enter`/`ctrl+s` save, `esc` cancel. `e`/`x` edit or delete the draft on the cursor line. On a threaded line, targets are numbered when the line is selected (`▸` marks the reply target); use `,`/`.` or `1`–`9`, then `R`. In conversation, `j`/`k` select a comment and `R` replies in that thread.
 
 ## Architecture
 

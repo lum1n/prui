@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -104,19 +105,37 @@ func lineThread(all []domain.Comment, drafts []domain.DraftComment, path string,
 	return out
 }
 
-func paintThread(nodes []threadNode, th diff.Theme, width int) string {
+func paintThread(nodes []threadNode, selectedID string, numberTargets bool, th diff.Theme, width int) string {
 	var b strings.Builder
+	idx := 0
 	for _, n := range nodes {
 		indent := strings.Repeat("  ", n.Depth)
 		if n.Draft != nil {
-			b.WriteString(diff.PaintAnnotation(indent+"you", n.Draft.Body, true, th, width) + "\n")
+			b.WriteString(diff.PaintAnnotation(indent+"you", n.Draft.Body, true, false, th, width) + "\n")
 			continue
 		}
 		if n.Comment != nil {
-			b.WriteString(diff.PaintAnnotation(indent+n.Comment.Author, n.Comment.Body, false, th, width) + "\n")
+			idx++
+			author := n.Comment.Author
+			if numberTargets {
+				author = fmt.Sprintf("#%d %s", idx, author)
+			}
+			sel := selectedID != "" && n.Comment.ID == selectedID
+			b.WriteString(diff.PaintAnnotation(indent+author, n.Comment.Body, false, sel, th, width) + "\n")
 		}
 	}
 	return b.String()
+}
+
+// replyableIDs returns remote comment IDs in thread display order.
+func replyableIDs(nodes []threadNode) []string {
+	out := make([]string, 0)
+	for _, n := range nodes {
+		if n.Comment != nil {
+			out = append(out, n.Comment.ID)
+		}
+	}
+	return out
 }
 
 // convEntry is one selectable row in the conversation / thread picker.

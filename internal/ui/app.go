@@ -113,6 +113,7 @@ type Model struct {
 	editingID      string // non-empty while editing an existing draft
 	commentGeneral bool   // true when drafting a PR-level (non-line) comment
 	replyParentID  string // non-empty when drafting a reply in a thread
+	threadTargetID string // remote comment selected as reply target on the cursor line
 	convCursor     int    // selected row in conversation thread list
 	activePath     string // last requested / shown file path
 	leftWidth      int
@@ -201,7 +202,9 @@ const defaultHelp = `Keys
   tab       switch pane
   enter     open PR / load file
   c         new comment on line
-  R         reply to comment on line / selected conversation comment
+  R         reply to selected comment (diff: ▸ target · conversation: cursor)
+  ,/.       prev/next reply target on line
+  1-9       jump to reply target #N on line
   e         edit draft on line
   x         delete draft on line
   v         toggle range select
@@ -217,6 +220,7 @@ const defaultHelp = `Keys
   q/esc     back / quit
 
 Inline comment: enter save, esc cancel
+Diff thread: ,/. or 1-9 pick target · R reply
 Conversation: j/k select · R reply · c new
 
 Views
@@ -606,12 +610,29 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.beginComment("")
 		case "R":
-			parent := m.replyTargetOnCursor()
+			m.syncThreadTarget()
+			parent := m.threadTargetID
 			if parent == "" {
 				m.status = "No comment to reply to on this line"
 				return m, nil
 			}
 			return m, m.beginReply(parent, false)
+		case ",":
+			if m.cycleThreadTarget(-1) {
+				m.renderDiff()
+			}
+			return m, nil
+		case ".":
+			if m.cycleThreadTarget(1) {
+				m.renderDiff()
+			}
+			return m, nil
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+			n := int(msg.String()[0] - '0')
+			if m.pickThreadTarget(n) {
+				m.renderDiff()
+			}
+			return m, nil
 		case "e":
 			d := m.draftOnCursor()
 			if d == nil {
@@ -758,24 +779,67 @@ func (m *Model) draftOnCursor() *domain.DraftComment {
 	return found
 }
 
-// replyTargetOnCursor picks the last remote comment in the cursor line thread.
-func (m *Model) replyTargetOnCursor() string {
+// cursorThreadNodes returns the comment thread under the cursor line.
+func (m *Model) cursorThreadNodes() []threadNode {
 	row, ok := m.cursorRow()
 	if !ok || row.header || row.fd == nil || row.line < 0 || row.line >= len(row.fd.Lines) {
-		return ""
+		return nil
 	}
 	var drafts []domain.DraftComment
 	if m.session != nil {
 		drafts = m.session.Draft.Comments
 	}
-	nodes := lineThread(m.comments, drafts, row.path, row.fd.Lines[row.line])
-	parent := ""
-	for _, n := range nodes {
-		if n.Comment != nil {
-			parent = n.Comment.ID
+	return lineThread(m.comments, drafts, row.path, row.fd.Lines[row.line])
+}
+
+// syncThreadTarget keeps threadTargetID valid for the cursor line (default: last).
+func (m *Model) syncThreadTarget() {
+	ids := replyableIDs(m.cursorThreadNodes())
+	if len(ids) == 0 {
+		m.threadTargetID = ""
+		return
+	}
+	for _, id := range ids {
+		if id == m.threadTargetID {
+			return
 		}
 	}
-	return parent
+	m.threadTargetID = ids[len(ids)-1]
+}
+
+func (m *Model) cycleThreadTarget(delta int) bool {
+	ids := replyableIDs(m.cursorThreadNodes())
+	if len(ids) == 0 {
+		m.threadTargetID = ""
+		m.status = "No comments on this line"
+		return false
+	}
+	idx := len(ids) - 1
+	for i, id := range ids {
+		if id == m.threadTargetID {
+			idx = i
+			break
+		}
+	}
+	idx = (idx + delta + len(ids)) % len(ids)
+	m.threadTargetID = ids[idx]
+	m.status = fmt.Sprintf("Reply target %d/%d", idx+1, len(ids))
+	return true
+}
+
+func (m *Model) pickThreadTarget(n int) bool {
+	ids := replyableIDs(m.cursorThreadNodes())
+	if len(ids) == 0 {
+		m.status = "No comments on this line"
+		return false
+	}
+	if n < 1 || n > len(ids) {
+		m.status = fmt.Sprintf("No comment #%d (1–%d)", n, len(ids))
+		return false
+	}
+	m.threadTargetID = ids[n-1]
+	m.status = fmt.Sprintf("Reply target %d/%d", n, len(ids))
+	return true
 }
 
 func (m *Model) beginComment(editID string) tea.Cmd {
@@ -1155,6 +1219,8 @@ func (m *Model) moveCursor(delta int) {
 			return
 		}
 		m.moveFlatCursor(delta)
+		m.threadTargetID = ""
+		m.syncThreadTarget()
 		m.renderDiff()
 		return
 	}
@@ -1168,6 +1234,8 @@ func (m *Model) moveCursor(delta int) {
 			break
 		}
 	}
+	m.threadTargetID = ""
+	m.syncThreadTarget()
 	m.renderDiff()
 }
 
@@ -1193,6 +1261,8 @@ func (m *Model) pageCursor(dir int) {
 		if path := m.flatPath(m.cursorLine); path != "" && path != prevPath {
 			m.syncFileList(path)
 		}
+		m.threadTargetID = ""
+		m.syncThreadTarget()
 		m.renderDiff()
 		return
 	}
@@ -1206,6 +1276,8 @@ func (m *Model) pageCursor(dir int) {
 	if m.cursorLine >= len(m.fileDiff.Lines) {
 		m.cursorLine = len(m.fileDiff.Lines) - 1
 	}
+	m.threadTargetID = ""
+	m.syncThreadTarget()
 	m.renderDiff()
 }
 
@@ -1404,7 +1476,7 @@ func (m *Model) renderDiff() {
 		}
 	}
 	for i := start; i < end; i++ {
-		m.writeDiffLine(&b, m.fileDiff, m.fileDiff.Lines[i], i == m.cursorLine || m.lineInRange(i), th, width)
+		m.writeDiffLine(&b, m.fileDiff, m.fileDiff.Lines[i], i == m.cursorLine || m.lineInRange(i), i == m.cursorLine, th, width)
 	}
 	if end < len(m.fileDiff.Lines) {
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ··· %d lines below ···", len(m.fileDiff.Lines)-end)) + "\n")
@@ -1456,7 +1528,7 @@ func (m *Model) renderFlatDiff(th diff.Theme, width int) {
 		if row.fd == nil || row.line < 0 || row.line >= len(row.fd.Lines) {
 			continue
 		}
-		m.writeDiffLine(&b, row.fd, row.fd.Lines[row.line], sel, th, width)
+		m.writeDiffLine(&b, row.fd, row.fd.Lines[row.line], sel, i == m.cursorLine, th, width)
 	}
 	if end < len(m.flat) {
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ··· %d rows below ···", len(m.flat)-end)) + "\n")
@@ -1482,7 +1554,7 @@ func (m *Model) lineInRange(i int) bool {
 	return i >= lo && i <= hi
 }
 
-func (m *Model) writeDiffLine(b *strings.Builder, fd *domain.FileDiff, ln domain.DiffLine, sel bool, th diff.Theme, width int) {
+func (m *Model) writeDiffLine(b *strings.Builder, fd *domain.FileDiff, ln domain.DiffLine, sel, focus bool, th diff.Theme, width int) {
 	opt := diff.Options{Theme: th, Width: width, Selected: sel, Split: m.splitDiff}
 	b.WriteString(diff.Paint(m.hl, fd.Path, ln, opt))
 	b.WriteByte('\n')
@@ -1490,7 +1562,15 @@ func (m *Model) writeDiffLine(b *strings.Builder, fd *domain.FileDiff, ln domain
 	if m.session != nil {
 		drafts = m.session.Draft.Comments
 	}
-	b.WriteString(paintThread(lineThread(m.comments, drafts, fd.Path, ln), th, width))
+	nodes := lineThread(m.comments, drafts, fd.Path, ln)
+	selectedID := ""
+	number := false
+	if focus {
+		m.syncThreadTarget()
+		selectedID = m.threadTargetID
+		number = len(replyableIDs(nodes)) > 1
+	}
+	b.WriteString(paintThread(nodes, selectedID, number, th, width))
 }
 
 func (m Model) View() string {
@@ -1640,7 +1720,7 @@ func (m Model) reviewHelpLine() string {
 	}
 	nConv := len(conversationComments(m.comments))
 	return fmt.Sprintf(
-		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · R reply · e edit · x del · v range · a %s · d %s · C talk(%d) · r submit · O open · ? · q",
+		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · ,/.|# target · R reply · e edit · x del · v range · a %s · d %s · C talk(%d) · r submit · O open · ? · q",
 		pane, view, layout, nConv,
 	)
 }

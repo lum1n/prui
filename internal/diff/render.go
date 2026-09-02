@@ -453,15 +453,21 @@ func paintSplit(h *Highlighter, path string, line domain.DiffLine, th Theme, wid
 }
 
 // PaintAnnotation renders a quiet annotation under a line.
-func PaintAnnotation(author, body string, draft bool, th Theme, width int) string {
+func PaintAnnotation(author, body string, draft, selected bool, th Theme, width int) string {
 	prefix := "     └ "
 	fg := th.AnnotationFg
 	if draft {
 		prefix = "     └ draft · "
 		fg = th.DraftFg
 	}
+	if selected {
+		prefix = "     ▸ "
+	}
 	label := prefix + author + " · " + strings.ReplaceAll(body, "\n", " ")
 	st := lipgloss.NewStyle().Foreground(fg)
+	if selected {
+		st = st.Bold(true).Foreground(th.DraftFg)
+	}
 	if width > 0 {
 		st = st.Width(width).MaxWidth(width)
 		return st.Render(truncate.StringWithTail(label, uint(maxInt(1, width)), "…"))

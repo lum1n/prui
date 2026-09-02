@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vegard/prui/internal/diff"
 	"github.com/vegard/prui/internal/domain"
 )
 
@@ -87,5 +88,23 @@ func TestFormatConversationShowsNesting(t *testing.T) {
 		if !strings.Contains(out, part) {
 			t.Fatalf("missing %q in:\n%s", part, out)
 		}
+	}
+}
+
+func TestPaintThreadNumbersSelected(t *testing.T) {
+	nodes := []threadNode{
+		{Comment: &domain.Comment{ID: "1", Author: "Alice", Body: "one"}, Depth: 0},
+		{Comment: &domain.Comment{ID: "2", Author: "Bob", Body: "two"}, Depth: 1},
+		{Comment: &domain.Comment{ID: "3", Author: "Carol", Body: "three"}, Depth: 1},
+	}
+	th := diff.ThemeFor("dark")
+	out := paintThread(nodes, "2", true, th, 80)
+	for _, part := range []string{"#1 Alice", "#2 Bob", "#3 Carol", "▸"} {
+		if !strings.Contains(out, part) {
+			t.Fatalf("missing %q in:\n%s", part, out)
+		}
+	}
+	if replyableIDs(nodes)[1] != "2" {
+		t.Fatal("replyable order")
 	}
 }

@@ -1050,7 +1050,11 @@ func (m *Model) refreshFileList() {
 func (m *Model) layout() {
 	titleH := 1
 	statusH := 1
-	contentH := m.height - titleH - statusH
+	helpH := 0
+	if m.screen == screenReview || m.screen == screenSubmit {
+		helpH = 1
+	}
+	contentH := m.height - titleH - statusH - helpH
 	if contentH < 3 {
 		contentH = 3
 	}
@@ -1330,12 +1334,51 @@ func (m Model) View() string {
 		status = errorStyle.Render(m.errMsg)
 	}
 	statusBar := statusStyle.Width(m.width).Render(truncate(status, m.width))
-	contentH := m.height - 2
+
+	helpH := 0
+	var helpBar string
+	if m.screen == screenReview || m.screen == screenSubmit {
+		helpH = 1
+		helpBar = helpBarStyle.Width(m.width).Render(truncate(m.reviewHelpLine(), m.width))
+	}
+
+	contentH := m.height - 2 - helpH // title + status (+ help)
 	if contentH < 1 {
 		contentH = 1
 	}
 	body = lipgloss.NewStyle().Height(contentH).MaxHeight(contentH).Render(body)
+	if helpH > 0 {
+		return lipgloss.JoinVertical(lipgloss.Left, title, body, helpBar, statusBar)
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, title, body, statusBar)
+}
+
+func (m Model) reviewHelpLine() string {
+	if m.screen == screenSubmit {
+		return "j/k choose · enter submit · esc cancel"
+	}
+	if m.commenting {
+		if m.editingID != "" {
+			return "enter save edit · esc cancel"
+		}
+		return "enter save · esc cancel"
+	}
+	view := "this-file"
+	if m.showAll {
+		view = "all-files"
+	}
+	layout := "unified"
+	if m.splitDiff {
+		layout = "split"
+	}
+	pane := "files"
+	if m.pane == paneDiff {
+		pane = "diff"
+	}
+	return fmt.Sprintf(
+		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · e edit · x del · v range · a %s · d %s · r submit · O open · ? · q",
+		pane, view, layout,
+	)
 }
 
 var (
@@ -1343,6 +1386,7 @@ var (
 	mutedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#7a7a7a"))
 	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#f07178"))
 	statusStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#abb2bf")).Background(lipgloss.Color("#1e1e2e"))
+	helpBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#7a7a7a")).Background(lipgloss.Color("#16161e"))
 	panel        = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#333344"))
 	focusedPanel = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#e6c07b"))
 	draftStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#e6c07b"))

@@ -26,6 +26,7 @@ const (
 	screenSubmit
 	screenHelp
 	screenBody
+	screenConversation
 )
 
 type pane int
@@ -108,12 +109,13 @@ type Model struct {
 	splitDiff  bool
 	showAll    bool // all files in one scrollable view
 
-	commenting    bool
-	editingID     string // non-empty while editing an existing draft
-	activePath    string // last requested / shown file path
-	leftWidth     int
-	rightWidth    int
-	contentHeight int
+	commenting     bool
+	editingID      string // non-empty while editing an existing draft
+	commentGeneral bool   // true when drafting a PR-level (non-line) comment
+	activePath     string // last requested / shown file path
+	leftWidth      int
+	rightWidth     int
+	contentHeight  int
 
 	diffCache map[string]*domain.FileDiff
 	flat      []flatRow
@@ -205,6 +207,7 @@ const defaultHelp = `Keys
   d         toggle unified/split layout
   a         toggle this-file / all-files view
   [ ]       prev/next hunk
+  C         PR conversation (general comments)
   o         show PR URL in status
   O         open PR in browser
   ?         help
@@ -214,7 +217,8 @@ Inline comment: enter save, esc cancel
 
 Views
   this-file   only the selected path (default)
-  all-files   every path in one scroll; file list + section headers track focus`
+  all-files   every path in one scroll; file list + section headers track focus
+  conversation  PR-level comments (key C)`
 
 func (m Model) Init() tea.Cmd {
 	if m.opts.PRNumber > 0 {
@@ -451,6 +455,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.bodyVP, cmd = m.bodyVP.Update(msg)
 		return m, cmd
+	case screenConversation:
+		return m.updateConversation(msg)
 	}
 	return m, nil
 }
@@ -525,6 +531,10 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "p":
 			m.showBody()
 			m.screen = screenBody
+			return m, nil
+		case "C":
+			m.showConversation()
+			m.screen = screenConversation
 			return m, nil
 		case "d":
 			m.splitDiff = !m.splitDiff
@@ -742,10 +752,12 @@ func (m *Model) draftOnCursor() *domain.DraftComment {
 func (m *Model) beginComment(editID string) tea.Cmd {
 	m.pane = paneDiff
 	m.editingID = editID
+	m.commentGeneral = false
 	if editID != "" && m.session != nil {
 		for _, d := range m.session.Draft.Comments {
 			if d.ID == editID {
 				m.comment.SetValue(d.Body)
+				m.commentGeneral = d.Anchor == nil
 				break
 			}
 		}
@@ -760,16 +772,82 @@ func (m *Model) beginComment(editID string) tea.Cmd {
 	return textarea.Blink
 }
 
+func (m *Model) beginGeneralComment() tea.Cmd {
+	m.editingID = ""
+	m.commentGeneral = true
+	m.comment.SetValue("")
+	m.comment.Focus()
+	m.commenting = true
+	m.status = "General comment — enter save, esc cancel"
+	m.layout()
+	m.showConversation()
+	return textarea.Blink
+}
+
+func (m Model) updateConversation(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.commenting && m.commentGeneral {
+		return m.updateInlineComment(msg)
+	}
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "esc", "C":
+			m.screen = screenReview
+			m.commenting = false
+			m.commentGeneral = false
+			m.layout()
+			return m, nil
+		case "c":
+			return m, m.beginGeneralComment()
+		case "e":
+			drafts := generalDrafts(m.sessionDrafts())
+			if len(drafts) == 0 {
+				m.status = "No general drafts"
+				return m, nil
+			}
+			d := drafts[len(drafts)-1]
+			m.screen = screenConversation
+			return m, m.beginComment(d.ID)
+		case "x":
+			drafts := generalDrafts(m.sessionDrafts())
+			if len(drafts) == 0 {
+				m.status = "No general drafts"
+				return m, nil
+			}
+			_ = m.session.RemoveComment(drafts[len(drafts)-1].ID)
+			m.status = "Draft deleted"
+			m.showConversation()
+			return m, nil
+		}
+	}
+	var cmd tea.Cmd
+	m.bodyVP, cmd = m.bodyVP.Update(msg)
+	return m, cmd
+}
+
+func (m *Model) sessionDrafts() []domain.DraftComment {
+	if m.session == nil {
+		return nil
+	}
+	return m.session.Draft.Comments
+}
+
 func (m Model) updateInlineComment(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":
+			wasGeneral := m.commentGeneral
 			m.commenting = false
 			m.editingID = ""
+			m.commentGeneral = false
 			m.comment.Blur()
 			m.layout()
 			m.status = "Comment cancelled"
+			if wasGeneral {
+				m.screen = screenConversation
+				m.showConversation()
+			}
 			return m, nil
 		case "enter", "ctrl+s":
 			body := strings.TrimSpace(m.comment.Value())
@@ -781,8 +859,9 @@ func (m Model) updateInlineComment(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "No review session"
 				return m, nil
 			}
+			wasGeneral := m.commentGeneral
 			path := ""
-			if m.fileDiff != nil {
+			if !wasGeneral && m.fileDiff != nil {
 				path = m.fileDiff.Path
 			}
 			if m.editingID != "" {
@@ -791,6 +870,9 @@ func (m Model) updateInlineComment(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.status = "Draft updated"
+			} else if wasGeneral {
+				_ = m.session.AddComment(domain.DraftComment{Body: body})
+				m.status = "General draft added"
 			} else {
 				anchor := m.selectedAnchor()
 				_ = m.session.AddComment(domain.DraftComment{
@@ -804,9 +886,15 @@ func (m Model) updateInlineComment(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rangeStart = -1
 			m.commenting = false
 			m.editingID = ""
+			m.commentGeneral = false
 			m.comment.Blur()
 			m.layout()
-			m.renderDiff()
+			if wasGeneral {
+				m.screen = screenConversation
+				m.showConversation()
+			} else {
+				m.renderDiff()
+			}
 			return m, nil
 		}
 	}
@@ -1051,7 +1139,7 @@ func (m *Model) layout() {
 	titleH := 1
 	statusH := 1
 	helpH := 0
-	if m.screen == screenReview || m.screen == screenSubmit {
+	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenConversation {
 		helpH = 1
 	}
 	contentH := m.height - titleH - statusH - helpH
@@ -1088,8 +1176,17 @@ func (m *Model) layout() {
 	m.diffVP.Width = rightW - 2
 	m.diffVP.Height = diffH - 2
 	m.bodyVP.Width = m.width
-	m.bodyVP.Height = contentH
-	m.comment.SetWidth(rightW - 4)
+	bodyH := contentH
+	if m.screen == screenConversation && m.commenting {
+		bodyH = contentH - commentH
+		if bodyH < 3 {
+			bodyH = 3
+		}
+		m.comment.SetWidth(m.width - 4)
+	} else {
+		m.comment.SetWidth(rightW - 4)
+	}
+	m.bodyVP.Height = bodyH
 	m.comment.SetHeight(3)
 	m.renderDiff()
 }
@@ -1104,6 +1201,16 @@ func (m *Model) showBody() {
 	}
 	rendered := renderMarkdown(raw, m.width-2)
 	m.bodyVP.SetContent(rendered)
+	m.bodyVP.GotoTop()
+}
+
+func (m *Model) showConversation() {
+	var drafts []domain.DraftComment
+	if m.session != nil {
+		drafts = generalDrafts(m.session.Draft.Comments)
+	}
+	content := formatConversation(conversationComments(m.comments), drafts, m.width-2)
+	m.bodyVP.SetContent(content)
 	m.bodyVP.GotoTop()
 }
 
@@ -1327,6 +1434,20 @@ func (m Model) View() string {
 		body = m.helpText
 	case screenBody:
 		body = m.bodyVP.View()
+	case screenConversation:
+		inner := m.bodyVP.View()
+		if m.commenting && m.commentGeneral {
+			label := "✎ general comment  (enter save · esc cancel)"
+			if m.editingID != "" {
+				label = "✎ edit general draft  (enter save · esc cancel)"
+			}
+			inner = lipgloss.JoinVertical(lipgloss.Left,
+				inner,
+				draftStyle.Render(label),
+				m.comment.View(),
+			)
+		}
+		body = inner
 	}
 
 	status := m.status
@@ -1337,7 +1458,7 @@ func (m Model) View() string {
 
 	helpH := 0
 	var helpBar string
-	if m.screen == screenReview || m.screen == screenSubmit {
+	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenConversation {
 		helpH = 1
 		helpBar = helpBarStyle.Width(m.width).Render(truncate(m.reviewHelpLine(), m.width))
 	}
@@ -1357,6 +1478,17 @@ func (m Model) reviewHelpLine() string {
 	if m.screen == screenSubmit {
 		return "j/k choose · enter submit · esc cancel"
 	}
+	if m.screen == screenConversation {
+		if m.commenting {
+			return "enter save · esc cancel"
+		}
+		n := len(conversationComments(m.comments))
+		d := 0
+		if m.session != nil {
+			d = len(generalDrafts(m.session.Draft.Comments))
+		}
+		return fmt.Sprintf("conversation · %d comments · %d drafts · c add · e edit draft · x del draft · C/esc back", n, d)
+	}
 	if m.commenting {
 		if m.editingID != "" {
 			return "enter save edit · esc cancel"
@@ -1375,9 +1507,10 @@ func (m Model) reviewHelpLine() string {
 	if m.pane == paneDiff {
 		pane = "diff"
 	}
+	nConv := len(conversationComments(m.comments))
 	return fmt.Sprintf(
-		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · e edit · x del · v range · a %s · d %s · r submit · O open · ? · q",
-		pane, view, layout,
+		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · e edit · x del · v range · a %s · d %s · C talk(%d) · r submit · O open · ? · q",
+		pane, view, layout, nConv,
 	)
 }
 

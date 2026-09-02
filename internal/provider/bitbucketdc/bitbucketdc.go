@@ -368,10 +368,11 @@ type dcSegment struct {
 }
 
 type dcLine struct {
-	Line        flexInt `json:"line"`
+	// Line is the line *content* in Bitbucket DC (not a line number).
+	Line        string  `json:"line"`
 	Source      flexInt `json:"source"`
 	Destination flexInt `json:"destination"`
-	Text        string  `json:"text"`
+	Truncated   bool    `json:"truncated"`
 }
 
 func dcDiffToUnified(path string, raw dcDiffResponse) string {
@@ -399,7 +400,7 @@ func dcDiffToUnified(path string, raw dcDiffResponse) string {
 					prefix = "-"
 				}
 				for _, ln := range seg.Lines {
-					b.WriteString(prefix + ln.Text + "\n")
+					b.WriteString(prefix + ln.Line + "\n")
 				}
 			}
 		}

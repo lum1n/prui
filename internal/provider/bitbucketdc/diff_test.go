@@ -6,18 +6,19 @@ import (
 	"testing"
 )
 
-func TestFlexIntStringAndNumber(t *testing.T) {
+func TestDCDiffLineIsContent(t *testing.T) {
 	var raw dcDiffResponse
+	// Bitbucket DC: "line" is content; numbers are source/destination.
 	payload := `{
   "diffs": [{
     "hunks": [{
-      "sourceLine": "10",
+      "sourceLine": 10,
       "destinationLine": 12,
       "segments": [{
         "type": "ADDED",
         "lines": [
-          {"line": "13", "source": 0, "destination": "13", "text": "hello"},
-          {"line": 14, "text": "world"}
+          {"source": 0, "destination": 13, "line": ".join('');"},
+          {"source": 0, "destination": 14, "line": "hello world"}
         ]
       }]
     }]
@@ -26,14 +27,28 @@ func TestFlexIntStringAndNumber(t *testing.T) {
 	if err := json.Unmarshal([]byte(payload), &raw); err != nil {
 		t.Fatal(err)
 	}
-	if raw.Diffs[0].Hunks[0].SourceLine.Int() != 10 {
-		t.Fatalf("sourceLine %d", raw.Diffs[0].Hunks[0].SourceLine.Int())
+	ln := raw.Diffs[0].Hunks[0].Segments[0].Lines[0]
+	if ln.Line != ".join('');" {
+		t.Fatalf("content %q", ln.Line)
 	}
-	if raw.Diffs[0].Hunks[0].Segments[0].Lines[0].Line.Int() != 13 {
-		t.Fatalf("line %d", raw.Diffs[0].Hunks[0].Segments[0].Lines[0].Line.Int())
+	if ln.Destination.Int() != 13 {
+		t.Fatalf("destination %d", ln.Destination.Int())
 	}
-	unified := dcDiffToUnified("a.go", raw)
-	if !strings.Contains(unified, "+hello") || !strings.Contains(unified, "@@ -10 +12 @@") {
+	unified := dcDiffToUnified("a.js", raw)
+	if !strings.Contains(unified, "+.join('');") || !strings.Contains(unified, "+hello world") {
 		t.Fatalf("unified:\n%s", unified)
+	}
+	if !strings.Contains(unified, "@@ -10 +12 @@") {
+		t.Fatalf("hunk header missing:\n%s", unified)
+	}
+}
+
+func TestFlexIntNumericString(t *testing.T) {
+	var n flexInt
+	if err := json.Unmarshal([]byte(`"42"`), &n); err != nil {
+		t.Fatal(err)
+	}
+	if n.Int() != 42 {
+		t.Fatalf("%d", n.Int())
 	}
 }

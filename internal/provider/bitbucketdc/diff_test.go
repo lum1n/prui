@@ -43,6 +43,13 @@ func TestDCDiffLineIsContent(t *testing.T) {
 	}
 }
 
+func TestEncodeDiffPath(t *testing.T) {
+	got := encodeDiffPath("src/foo bar.js")
+	if got != "src/foo%20bar.js" {
+		t.Fatalf("%q", got)
+	}
+}
+
 func TestFlexIntNumericString(t *testing.T) {
 	var n flexInt
 	if err := json.Unmarshal([]byte(`"42"`), &n); err != nil {

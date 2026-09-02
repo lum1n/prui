@@ -133,8 +133,8 @@ func (c *Client) ListFiles(ctx context.Context, ref domain.PRRef) ([]domain.File
 	}
 	out := make([]domain.FileChange, 0, len(page.Values))
 	for _, ch := range page.Values {
-		path := ch.Path.ToString
-		oldPath := ch.SrcPath.ToString
+		path := ch.Path.String()
+		oldPath := ch.SrcPath.String()
 		st := domain.FileModified
 		switch strings.ToUpper(ch.Type) {
 		case "ADD":
@@ -150,14 +150,30 @@ func (c *Client) ListFiles(ctx context.Context, ref domain.PRRef) ([]domain.File
 }
 
 func (c *Client) GetFileDiff(ctx context.Context, ref domain.PRRef, path string) (*domain.FileDiff, error) {
-	// DC raw diff: /pull-requests/{id}/diff?path=
-	u := fmt.Sprintf("%s/diff?path=%s&contextLines=3", c.prPath(ref), url.QueryEscape(path))
+	// Prefer path-in-URL form: /diff/{path}?contextLines=…
+	u := fmt.Sprintf("%s/diff/%s?contextLines=5", c.prPath(ref), encodeDiffPath(path))
 	var raw dcDiffResponse
 	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, u, c.headers(), nil, &raw); err != nil {
-		return nil, err
+		// Fallback: query parameter form used by some DC versions.
+		u2 := fmt.Sprintf("%s/diff?path=%s&contextLines=5", c.prPath(ref), url.QueryEscape(path))
+		if _, err2 := httputil.DoJSON(ctx, c.http, http.MethodGet, u2, c.headers(), nil, &raw); err2 != nil {
+			return nil, err
+		}
 	}
 	unified := dcDiffToUnified(path, raw)
+	if strings.TrimSpace(unified) == "" || !strings.Contains(unified, "@@") {
+		return &domain.FileDiff{Path: path, Status: domain.FileModified, Raw: unified}, nil
+	}
 	return diff.ParseUnified(path, unified)
+}
+
+// encodeDiffPath keeps slashes so Bitbucket's {path:.*} matcher works.
+func encodeDiffPath(path string) string {
+	parts := strings.Split(path, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return strings.Join(parts, "/")
 }
 
 func (c *Client) ListComments(ctx context.Context, ref domain.PRRef) ([]domain.Comment, error) {
@@ -308,8 +324,23 @@ func (p dcPR) toDomain(repo domain.RepoRef, baseURL string) domain.PullRequest {
 
 type dcChange struct {
 	Type    string `json:"type"`
-	Path    struct{ ToString string `json:"toString"` } `json:"path"`
-	SrcPath struct{ ToString string `json:"toString"` } `json:"srcPath"`
+	Path    dcPath `json:"path"`
+	SrcPath dcPath `json:"srcPath"`
+}
+
+type dcPath struct {
+	ToString   string   `json:"toString"`
+	Components []string `json:"components"`
+}
+
+func (p dcPath) String() string {
+	if p.ToString != "" {
+		return p.ToString
+	}
+	if len(p.Components) > 0 {
+		return strings.Join(p.Components, "/")
+	}
+	return ""
 }
 
 // flexInt unmarshals JSON numbers or numeric strings.

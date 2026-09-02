@@ -223,11 +223,9 @@ func LanguageFromPath(path string) string {
 
 // Commentable returns true if the line can receive an inline comment.
 func Commentable(line domain.DiffLine) bool {
-	if strings.HasPrefix(line.Text, "@@") || (line.OldNumber == 0 && line.NewNumber == 0 && line.Kind == domain.LineContext) {
-		// hunk headers stored as context with no numbers
-		if line.Anchor.Line == 0 && line.Kind == domain.LineContext && line.OldNumber == 0 && line.NewNumber == 0 {
-			return false
-		}
+	if IsHunkHeader(line) {
+		return false
 	}
-	return line.Kind == domain.LineAdded || line.Kind == domain.LineRemoved || line.Kind == domain.LineContext && (line.NewNumber > 0 || line.OldNumber > 0)
+	return line.Kind == domain.LineAdded || line.Kind == domain.LineRemoved ||
+		(line.Kind == domain.LineContext && (line.NewNumber > 0 || line.OldNumber > 0))
 }

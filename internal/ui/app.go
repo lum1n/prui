@@ -23,7 +23,6 @@ type screen int
 const (
 	screenPRList screen = iota
 	screenReview
-	screenComment
 	screenSubmit
 	screenHelp
 	screenBody
@@ -107,6 +106,12 @@ type Model struct {
 	loading    bool
 	bodyVP     viewport.Model
 	splitDiff  bool
+
+	commenting   bool
+	activePath   string // last requested / shown file path
+	leftWidth    int
+	rightWidth   int
+	contentHeight int
 }
 
 type loadedPRsMsg struct {
@@ -121,8 +126,9 @@ type loadedReviewMsg struct {
 	err      error
 }
 type loadedDiffMsg struct {
-	fd  *domain.FileDiff
-	err error
+	path string
+	fd   *domain.FileDiff
+	err  error
 }
 type submitDoneMsg struct{ err error }
 
@@ -140,9 +146,11 @@ func NewModel(opts Options) Model {
 	fileList.SetFilteringEnabled(true)
 
 	ta := textarea.New()
-	ta.Placeholder = "Comment…"
+	ta.Placeholder = "Comment on this line… (enter save, esc cancel)"
 	ta.ShowLineNumbers = false
-	ta.SetHeight(6)
+	ta.CharLimit = 4000
+	ta.SetHeight(3)
+	ta.Prompt = "▎ "
 
 	theme := "dark"
 	if opts.Config != nil {
@@ -174,7 +182,7 @@ const defaultHelp = `Keys
   j/k       move
   tab       switch pane
   enter     open PR / load file
-  c         comment on line
+  c         comment on line (inline)
   v         toggle range select
   r         submit review
   p         PR description (markdown)
@@ -184,7 +192,7 @@ const defaultHelp = `Keys
   ?         help
   q/esc     back / quit
 
-Comment editor: ctrl+s save draft, esc cancel`
+Inline comment: type on the selected line, enter to save, esc to cancel`
 
 func (m Model) Init() tea.Cmd {
 	if m.opts.PRNumber > 0 {
@@ -223,11 +231,17 @@ func (m Model) loadReview(num int) tea.Cmd {
 }
 
 func (m Model) loadDiff(path string) tea.Cmd {
+	if path == "" || m.pr == nil {
+		return nil
+	}
+	num := m.pr.Ref.Number
+	repo := m.opts.Repo
+	prov := m.opts.Provider
 	return func() tea.Msg {
 		ctx := context.Background()
-		ref := domain.PRRef{Repo: m.opts.Repo, Number: m.pr.Ref.Number}
-		fd, err := m.opts.Provider.GetFileDiff(ctx, ref, path)
-		return loadedDiffMsg{fd: fd, err: err}
+		ref := domain.PRRef{Repo: repo, Number: num}
+		fd, err := prov.GetFileDiff(ctx, ref, path)
+		return loadedDiffMsg{path: path, fd: fd, err: err}
 	}
 }
 
@@ -268,18 +282,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshFileList()
 		m.status = fmt.Sprintf("PR #%d — %s", m.pr.Ref.Number, m.pr.Title)
 		if len(m.files) > 0 {
+			m.activePath = m.files[0].Path
+			m.loading = true
 			return m, m.loadDiff(m.files[0].Path)
 		}
 		return m, nil
 
 	case loadedDiffMsg:
+		m.loading = false
+		// Ignore stale responses from a previous selection.
+		if msg.path != "" && m.activePath != "" && msg.path != m.activePath {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.errMsg = msg.err.Error()
 			return m, nil
 		}
+		m.errMsg = ""
 		m.fileDiff = msg.fd
+		m.activePath = msg.path
+		if msg.fd != nil && len(msg.fd.Lines) == 0 {
+			m.status = msg.path + " (no textual diff — binary or empty)"
+		} else {
+			m.status = msg.path
+		}
 		m.cursorLine = firstCommentable(msg.fd)
 		m.rangeStart = -1
+		m.commenting = false
+		m.layout()
 		m.renderDiff()
 		return m, nil
 
@@ -302,8 +332,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updatePRList(msg)
 	case screenReview:
 		return m.updateReview(msg)
-	case screenComment:
-		return m.updateComment(msg)
 	case screenSubmit:
 		return m.updateSubmit(msg)
 	case screenHelp:
@@ -354,6 +382,10 @@ func (m Model) updatePRList(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.commenting {
+		return m.updateInlineComment(msg)
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -408,9 +440,12 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Select a commentable line"
 				return m, nil
 			}
+			m.pane = paneDiff
 			m.comment.SetValue("")
 			m.comment.Focus()
-			m.screen = screenComment
+			m.commenting = true
+			m.layout()
+			m.status = "Commenting — enter save, esc cancel"
 			return m, textarea.Blink
 		case "v":
 			if m.rangeStart < 0 {
@@ -450,29 +485,56 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if m.pane == paneFiles {
+			prevPath := ""
+			if item, ok := m.fileList.SelectedItem().(fileItem); ok {
+				prevPath = item.file.Path
+			}
 			switch msg.String() {
 			case "enter", "l":
 				if item, ok := m.fileList.SelectedItem().(fileItem); ok {
-					m.loading = true
-					return m, m.loadDiff(item.file.Path)
+					return m, m.selectFile(item.file.Path)
 				}
 			}
 			var cmd tea.Cmd
 			m.fileList, cmd = m.fileList.Update(msg)
+			if item, ok := m.fileList.SelectedItem().(fileItem); ok {
+				if item.file.Path != prevPath && item.file.Path != m.activePath {
+					return m, tea.Batch(cmd, m.selectFile(item.file.Path))
+				}
+			}
 			return m, cmd
 		}
 	}
 	return m, nil
 }
 
-func (m Model) updateComment(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) selectFile(path string) tea.Cmd {
+	if path == "" {
+		return nil
+	}
+	if path == m.activePath && m.fileDiff != nil && m.errMsg == "" && !m.loading {
+		return nil
+	}
+	m.activePath = path
+	m.loading = true
+	m.errMsg = ""
+	m.commenting = false
+	m.status = "Loading " + path + "…"
+	return m.loadDiff(path)
+}
+
+func (m Model) updateInlineComment(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":
-			m.screen = screenReview
+			m.commenting = false
+			m.comment.Blur()
+			m.layout()
+			m.status = "Comment cancelled"
 			return m, nil
-		case "ctrl+s", "ctrl+enter":
+		case "enter":
+			// Single-line save; shift+enter / ctrl+j not needed for drafts.
 			body := strings.TrimSpace(m.comment.Value())
 			if body == "" {
 				m.status = "Empty comment"
@@ -486,7 +548,29 @@ func (m Model) updateComment(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 			m.refreshFileList()
 			m.rangeStart = -1
-			m.screen = screenReview
+			m.commenting = false
+			m.comment.Blur()
+			m.layout()
+			m.status = "Draft comment added"
+			m.renderDiff()
+			return m, nil
+		case "ctrl+s":
+			body := strings.TrimSpace(m.comment.Value())
+			if body == "" {
+				m.status = "Empty comment"
+				return m, nil
+			}
+			anchor := m.selectedAnchor()
+			_ = m.session.AddComment(domain.DraftComment{
+				Body:   body,
+				Path:   m.fileDiff.Path,
+				Anchor: anchor,
+			})
+			m.refreshFileList()
+			m.rangeStart = -1
+			m.commenting = false
+			m.comment.Blur()
+			m.layout()
 			m.status = "Draft comment added"
 			m.renderDiff()
 			return m, nil
@@ -611,6 +695,7 @@ func (m *Model) layout() {
 	if contentH < 3 {
 		contentH = 3
 	}
+	m.contentHeight = contentH
 	m.prList.SetSize(m.width, contentH)
 
 	leftW := m.width / 3
@@ -620,16 +705,29 @@ func (m *Model) layout() {
 	if leftW > 48 {
 		leftW = 48
 	}
-	rightW := m.width - leftW - 1
+	rightW := m.width - leftW
 	if rightW < 20 {
 		rightW = 20
 	}
-	m.fileList.SetSize(leftW, contentH)
-	m.diffVP.Width = rightW
-	m.diffVP.Height = contentH
+	m.leftWidth = leftW
+	m.rightWidth = rightW
+
+	commentH := 0
+	if m.commenting {
+		commentH = 5 // label + textarea
+	}
+	diffH := contentH - commentH
+	if diffH < 3 {
+		diffH = 3
+	}
+
+	m.fileList.SetSize(leftW-2, contentH-2) // account for panel border later
+	m.diffVP.Width = rightW - 2
+	m.diffVP.Height = diffH - 2
 	m.bodyVP.Width = m.width
 	m.bodyVP.Height = contentH
-	m.comment.SetWidth(min(80, m.width-4))
+	m.comment.SetWidth(rightW - 4)
+	m.comment.SetHeight(3)
 	m.renderDiff()
 }
 
@@ -666,14 +764,22 @@ func renderMarkdown(src string, width int) string {
 
 func (m *Model) renderDiff() {
 	if m.fileDiff == nil {
-		m.diffVP.SetContent("(no file selected)")
+		m.diffVP.SetContent("  select a file")
 		return
 	}
 	width := m.diffVP.Width
 	if width <= 0 {
 		width = 80
 	}
+	th := diff.ThemeFor("dark")
+	if m.opts.Config != nil {
+		th = diff.ThemeFor(m.opts.Config.UI.Theme)
+	}
+
 	var b strings.Builder
+	b.WriteString(diff.PaintFileHeader(m.fileDiff.Path, m.fileDiff.Status, th, width))
+	b.WriteByte('\n')
+
 	start, end := 0, len(m.fileDiff.Lines)
 	const margin = 200
 	if len(m.fileDiff.Lines) > margin*2 {
@@ -686,7 +792,7 @@ func (m *Model) renderDiff() {
 			end = len(m.fileDiff.Lines)
 		}
 		if start > 0 {
-			b.WriteString(fmt.Sprintf("… %d lines above …\n", start))
+			b.WriteString(mutedStyle.Render(fmt.Sprintf("  ··· %d lines above ···", start)) + "\n")
 		}
 	}
 	for i := start; i < end; i++ {
@@ -701,32 +807,30 @@ func (m *Model) renderDiff() {
 				sel = true
 			}
 		}
-		if m.splitDiff {
-			b.WriteString(diff.PaintSplitLine(m.hl, m.fileDiff.Path, ln, sel, width))
-		} else {
-			b.WriteString(diff.PaintDiffLine(m.hl, m.fileDiff.Path, ln, sel, width))
-		}
+		opt := diff.Options{Theme: th, Width: width, Selected: sel, Split: m.splitDiff}
+		b.WriteString(diff.Paint(m.hl, m.fileDiff.Path, ln, opt))
 		b.WriteByte('\n')
 		for _, c := range m.comments {
 			if c.Anchor != nil && c.Path == m.fileDiff.Path && c.Anchor.Line == ln.Anchor.Line && c.Anchor.Side == ln.Anchor.Side {
-				b.WriteString(annotationStyle.Render("  💬 "+c.Author+": "+truncate(c.Body, width-6)) + "\n")
+				b.WriteString(diff.PaintAnnotation(c.Author, c.Body, false, th, width) + "\n")
 			}
 		}
 		if m.session != nil {
 			for _, d := range m.session.Draft.Comments {
 				if d.Anchor != nil && d.Path == m.fileDiff.Path && d.Anchor.Line == ln.Anchor.Line {
-					b.WriteString(draftStyle.Render("  ✎ draft: "+truncate(d.Body, width-10)) + "\n")
+					b.WriteString(diff.PaintAnnotation("you", d.Body, true, th, width) + "\n")
 				}
 			}
 		}
 	}
 	if end < len(m.fileDiff.Lines) {
-		b.WriteString(fmt.Sprintf("… %d lines below …\n", len(m.fileDiff.Lines)-end))
+		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ··· %d lines below ···", len(m.fileDiff.Lines)-end)) + "\n")
 	}
 	m.diffVP.SetContent(b.String())
 	m.diffVP.GotoTop()
+	// +1 for file header
 	if start == 0 {
-		offset := m.cursorLine - m.diffVP.Height/2
+		offset := m.cursorLine + 1 - m.diffVP.Height/2
 		if offset > 0 {
 			m.diffVP.LineDown(offset)
 		}
@@ -747,24 +851,35 @@ func (m Model) View() string {
 	case screenPRList:
 		body = m.prList.View()
 	case screenReview:
-		left := m.fileList.View()
-		right := m.diffVP.View()
-		if m.pane == paneFiles {
-			left = focusedPanel.Render(left)
-			right = panel.Render(right)
+		leftInner := m.fileList.View()
+		rightInner := m.diffVP.View()
+		if m.commenting {
+			anchorHint := ""
+			if a := m.selectedAnchor(); a != nil {
+				anchorHint = fmt.Sprintf(" line %d", a.Line)
+			}
+			box := lipgloss.JoinVertical(lipgloss.Left,
+				draftStyle.Render("✎ comment"+anchorHint+"  (enter save · esc cancel)"),
+				m.comment.View(),
+			)
+			rightInner = lipgloss.JoinVertical(lipgloss.Left, rightInner, box)
+		}
+		lw, rw := m.leftWidth, m.rightWidth
+		if lw == 0 {
+			lw = m.width / 3
+		}
+		if rw == 0 {
+			rw = m.width - lw
+		}
+		var left, right string
+		if m.pane == paneFiles && !m.commenting {
+			left = focusedPanel.Width(lw).Render(leftInner)
+			right = panel.Width(rw).Render(rightInner)
 		} else {
-			left = panel.Render(left)
-			right = focusedPanel.Render(right)
+			left = panel.Width(lw).Render(leftInner)
+			right = focusedPanel.Width(rw).Render(rightInner)
 		}
 		body = lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-		if m.pr != nil && m.pr.Body != "" && m.fileDiff == nil {
-			body = lipgloss.JoinVertical(lipgloss.Left, mutedStyle.Render(truncate(m.pr.Body, m.width)), body)
-		}
-	case screenComment:
-		body = lipgloss.JoinVertical(lipgloss.Left,
-			titleStyle.Render("Add comment  (ctrl+s to save, esc cancel)"),
-			m.comment.View(),
-		)
 	case screenSubmit:
 		var lines []string
 		lines = append(lines, titleStyle.Render("Submit review"), "")
@@ -811,8 +926,7 @@ var (
 	statusStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#abb2bf")).Background(lipgloss.Color("#1e1e2e"))
 	panel        = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#333344"))
 	focusedPanel = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#e6c07b"))
-	annotationStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#61afef"))
-	draftStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#e6c07b"))
+	draftStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#e6c07b"))
 )
 
 func firstCommentable(fd *domain.FileDiff) int {

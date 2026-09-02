@@ -184,18 +184,11 @@ func TestBitbucketDCContract(t *testing.T) {
 			}},
 		})
 	})
+	mux.HandleFunc("/rest/api/1.0/projects/PROJ/repos/repo/pull-requests/1/diff/", func(w http.ResponseWriter, r *http.Request) {
+		writeDCDiff(w)
+	})
 	mux.HandleFunc("/rest/api/1.0/projects/PROJ/repos/repo/pull-requests/1/diff", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"diffs": []map[string]any{{
-				"hunks": []map[string]any{{
-					"sourceLine": 1, "destinationLine": 1,
-					"segments": []map[string]any{
-						{"type": "REMOVED", "lines": []map[string]any{{"text": "old"}}},
-						{"type": "ADDED", "lines": []map[string]any{{"text": "new"}}},
-					},
-				}},
-			}},
-		})
+		writeDCDiff(w)
 	})
 	mux.HandleFunc("/rest/api/1.0/projects/PROJ/repos/repo/pull-requests/1/activities", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"values": []any{}})
@@ -220,6 +213,20 @@ func TestBitbucketDCContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	runHostContract(t, client, domain.RepoRef{Owner: "PROJ", Name: "repo"}, 1)
+}
+
+func writeDCDiff(w http.ResponseWriter) {
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"diffs": []map[string]any{{
+			"hunks": []map[string]any{{
+				"sourceLine": 1, "destinationLine": 1,
+				"segments": []map[string]any{
+					{"type": "REMOVED", "lines": []map[string]any{{"source": 1, "line": "old"}}},
+					{"type": "ADDED", "lines": []map[string]any{{"destination": 1, "line": "new"}}},
+				},
+			}},
+		}},
+	})
 }
 
 func TestBitbucketDCCookieAuth(t *testing.T) {

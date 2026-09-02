@@ -394,6 +394,9 @@ func (c *Client) GetReviewStatus(ctx context.Context, ref domain.PRRef) (domain.
 	me, _, err := c.gh.Users.Get(ctx, "")
 	if err == nil {
 		st.ViewerLogin = me.GetLogin()
+		if name := me.GetName(); name != "" {
+			st.ViewerAliases = append(st.ViewerAliases, name)
+		}
 	}
 
 	opt := &github.ListOptions{PerPage: 100}

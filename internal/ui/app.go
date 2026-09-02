@@ -285,11 +285,8 @@ func (m Model) loadPRs() tea.Cmd {
 		if err != nil {
 			return loadedPRsMsg{err: err}
 		}
-		// Enrich review badges when the list payload omits them (GitHub).
+		// Enrich review badges (and resolve "you" against the signed-in user).
 		for i := range prs {
-			if prs[i].Reviews.HasReviews() {
-				continue
-			}
 			st, err := m.opts.Provider.GetReviewStatus(ctx, domain.PRRef{Repo: m.opts.Repo, Number: prs[i].Ref.Number})
 			if err == nil {
 				prs[i].Reviews = st

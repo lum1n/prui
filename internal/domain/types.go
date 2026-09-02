@@ -112,10 +112,11 @@ type Reviewer struct {
 // ReviewStatus summarizes approvals and change requests.
 type ReviewStatus struct {
 	Reviewers        []Reviewer
-	ViewerLogin      string
+	ViewerLogin      string   // primary login/slug for the signed-in user
+	ViewerAliases    []string // extra identities (display name, config username, …)
 	ViewerDecision   ReviewDecision
-	Approvers        []string // logins (derived)
-	ChangeRequesters []string // logins (derived)
+	Approvers        []string // display labels (derived)
+	ChangeRequesters []string // display labels (derived)
 }
 
 // HasReviews reports whether any approval or change-request is known.
@@ -129,23 +130,38 @@ func (s *ReviewStatus) Normalize() {
 	s.ChangeRequesters = nil
 	s.ViewerDecision = DecisionNone
 	for _, r := range s.Reviewers {
+		label := FormatAuthor(r.Login, r.Name)
 		switch r.Decision {
 		case DecisionApproved:
-			s.Approvers = append(s.Approvers, displayLogin(r))
+			s.Approvers = append(s.Approvers, label)
 		case DecisionChangesRequested:
-			s.ChangeRequesters = append(s.ChangeRequesters, displayLogin(r))
+			s.ChangeRequesters = append(s.ChangeRequesters, label)
 		}
-		if s.ViewerLogin != "" && strings.EqualFold(r.Login, s.ViewerLogin) {
+		if s.isViewer(r) {
 			s.ViewerDecision = r.Decision
 		}
 	}
 }
 
-func displayLogin(r Reviewer) string {
-	if r.Login != "" {
-		return r.Login
+func (s ReviewStatus) isViewer(r Reviewer) bool {
+	ids := make([]string, 0, 2+len(s.ViewerAliases))
+	if s.ViewerLogin != "" {
+		ids = append(ids, s.ViewerLogin)
 	}
-	return r.Name
+	ids = append(ids, s.ViewerAliases...)
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if strings.EqualFold(r.Login, id) || strings.EqualFold(r.Name, id) {
+			return true
+		}
+		if strings.EqualFold(AuthorLogin(FormatAuthor(r.Login, r.Name)), id) {
+			return true
+		}
+	}
+	return false
 }
 
 // Task is a required or optional PR checklist/blocker item.

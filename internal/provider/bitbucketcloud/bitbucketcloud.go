@@ -124,7 +124,8 @@ func (c *Client) ListPullRequests(ctx context.Context, ref domain.RepoRef, opts 
 			continue
 		}
 		pr := p.toDomain(ref)
-		pr.Reviews = reviewStatusFromBBParticipants(p.Participants, c.cred.Username)
+		viewer, aliases := c.resolveViewer(ctx)
+		pr.Reviews = reviewStatusFromBBParticipants(p.Participants, viewer, aliases...)
 		out = append(out, pr)
 	}
 	return out, nil
@@ -289,11 +290,39 @@ func (c *Client) GetReviewStatus(ctx context.Context, ref domain.PRRef) (domain.
 	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, c.prURL(ref, ""), c.headers(), nil, &p); err != nil {
 		return domain.ReviewStatus{}, err
 	}
-	return reviewStatusFromBBParticipants(p.Participants, c.cred.Username), nil
+	viewer, aliases := c.resolveViewer(ctx)
+	return reviewStatusFromBBParticipants(p.Participants, viewer, aliases...), nil
 }
 
-func reviewStatusFromBBParticipants(parts []bbParticipant, viewer string) domain.ReviewStatus {
-	st := domain.ReviewStatus{ViewerLogin: viewer}
+func (c *Client) resolveViewer(ctx context.Context) (login string, aliases []string) {
+	if c.cred.Username != "" {
+		aliases = append(aliases, c.cred.Username)
+	}
+	var me struct {
+		Username    string `json:"username"`
+		Nickname    string `json:"nickname"`
+		DisplayName string `json:"display_name"`
+		UUID        string `json:"uuid"`
+		AccountID   string `json:"account_id"`
+	}
+	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, c.api+"/user", c.headers(), nil, &me); err == nil {
+		login = firstNonEmpty(me.Nickname, me.Username, me.AccountID, me.UUID)
+		if me.DisplayName != "" {
+			aliases = append(aliases, me.DisplayName)
+		}
+		if me.Username != "" && me.Username != login {
+			aliases = append(aliases, me.Username)
+		}
+		if me.Nickname != "" && me.Nickname != login {
+			aliases = append(aliases, me.Nickname)
+		}
+		return login, aliases
+	}
+	return c.cred.Username, aliases
+}
+
+func reviewStatusFromBBParticipants(parts []bbParticipant, viewer string, aliases ...string) domain.ReviewStatus {
+	st := domain.ReviewStatus{ViewerLogin: viewer, ViewerAliases: aliases}
 	for _, part := range parts {
 		login := part.User.Nickname
 		if login == "" {
@@ -317,6 +346,15 @@ func reviewStatusFromBBParticipants(parts []bbParticipant, viewer string) domain
 	}
 	st.Normalize()
 	return st
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 func (c *Client) ListTasks(ctx context.Context, ref domain.PRRef) ([]domain.Task, error) {

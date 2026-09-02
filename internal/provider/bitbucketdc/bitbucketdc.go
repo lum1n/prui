@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -111,7 +112,7 @@ func (c *Client) ListPullRequests(ctx context.Context, ref domain.RepoRef, opts 
 	out := make([]domain.PullRequest, 0, len(page.Values))
 	for _, p := range page.Values {
 		pr := p.toDomain(ref, c.host.BaseURL)
-		if st, err := c.reviewStatusFromPR(p); err == nil {
+		if st, err := c.reviewStatusFromPR(ctx, p); err == nil {
 			pr.Reviews = st
 		}
 		out = append(out, pr)
@@ -125,7 +126,7 @@ func (c *Client) GetPullRequest(ctx context.Context, ref domain.PRRef) (*domain.
 		return nil, err
 	}
 	pr := p.toDomain(ref.Repo, c.host.BaseURL)
-	if st, err := c.reviewStatusFromPR(p); err == nil {
+	if st, err := c.reviewStatusFromPR(ctx, p); err == nil {
 		pr.Reviews = st
 	}
 	return &pr, nil
@@ -356,14 +357,14 @@ func (c *Client) GetReviewStatus(ctx context.Context, ref domain.PRRef) (domain.
 	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, c.prPath(ref), c.headers(), nil, &p); err != nil {
 		return domain.ReviewStatus{}, err
 	}
-	return c.reviewStatusFromPR(p)
+	return c.reviewStatusFromPR(ctx, p)
 }
 
-func (c *Client) reviewStatusFromPR(p dcPR) (domain.ReviewStatus, error) {
+func (c *Client) reviewStatusFromPR(ctx context.Context, p dcPR) (domain.ReviewStatus, error) {
 	st := domain.ReviewStatus{}
-	if c.cred.Username != "" {
-		st.ViewerLogin = c.cred.Username
-	}
+	login, aliases := c.resolveViewer(ctx)
+	st.ViewerLogin = login
+	st.ViewerAliases = aliases
 	for _, r := range p.Reviewers {
 		login := r.User.Slug
 		if login == "" {
@@ -392,25 +393,73 @@ func (c *Client) reviewStatusFromPR(p dcPR) (domain.ReviewStatus, error) {
 	return st, nil
 }
 
-func (c *Client) viewerSlug(ctx context.Context) (string, error) {
+func (c *Client) resolveViewer(ctx context.Context) (login string, aliases []string) {
 	if c.cred.Username != "" {
-		return c.cred.Username, nil
+		aliases = append(aliases, c.cred.Username)
+		var u struct {
+			Slug        string `json:"slug"`
+			Name        string `json:"name"`
+			DisplayName string `json:"displayName"`
+		}
+		uURL := c.api + "/users/" + url.PathEscape(c.cred.Username)
+		if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, uURL, c.headers(), nil, &u); err == nil {
+			login = firstNonEmpty(u.Slug, u.Name, c.cred.Username)
+			if u.DisplayName != "" {
+				aliases = append(aliases, u.DisplayName)
+			}
+			if u.Name != "" && u.Name != login {
+				aliases = append(aliases, u.Name)
+			}
+			if u.Slug != "" && u.Slug != login {
+				aliases = append(aliases, u.Slug)
+			}
+			return login, aliases
+		}
+		login = c.cred.Username
 	}
-	var me struct {
-		Slug string `json:"slug"`
-		Name string `json:"name"`
+	// Cookie sessions: whoami servlet returns the username as plain text on many DC installs.
+	if base := strings.TrimRight(c.host.BaseURL, "/"); base != "" {
+		who := base + "/plugins/servlet/applinks/whoami"
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, who, nil)
+		if err == nil {
+			for k, v := range c.headers() {
+				req.Header.Set(k, v)
+			}
+			resp, err := c.http.Do(req)
+			if err == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode < 300 {
+					data, _ := io.ReadAll(resp.Body)
+					id := strings.TrimSpace(string(data))
+					if id != "" && !strings.Contains(id, "<") {
+						if login == "" {
+							login = id
+						} else if !strings.EqualFold(login, id) {
+							aliases = append(aliases, id)
+						}
+					}
+				}
+			}
+		}
 	}
-	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, c.api+"/users/"+url.PathEscape("~"), c.headers(), nil, &me); err != nil {
-		// Fallback: /application-properties won't help; try users?filter
-		return "", fmt.Errorf("could not resolve current user slug (set hosts[].username): %w", err)
-	}
-	if me.Slug != "" {
-		return me.Slug, nil
-	}
-	if me.Name != "" {
-		return me.Name, nil
+	return login, aliases
+}
+
+func (c *Client) viewerSlug(ctx context.Context) (string, error) {
+	login, _ := c.resolveViewer(ctx)
+	if login != "" {
+		return login, nil
 	}
 	return "", fmt.Errorf("could not resolve current user slug (set hosts[].username)")
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 func (c *Client) ListTasks(ctx context.Context, ref domain.PRRef) ([]domain.Task, error) {

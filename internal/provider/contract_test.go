@@ -179,6 +179,11 @@ func TestBitbucketCloudContract(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": 9, "state": "RESOLVED"})
 	})
+	mux.HandleFunc("/2.0/user", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"nickname": "bob", "username": "bob", "display_name": "Bob",
+		})
+	})
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

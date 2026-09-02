@@ -1,0 +1,14 @@
+---
+description: Always commit and push after changes in this repo
+alwaysApply: true
+---
+
+# Auto commit & push
+
+After finishing any code or config change in this repository:
+
+1. Commit with a concise message (HEREDOC; follow existing `fix:` / `polish:` style).
+2. Push to `origin` on the current branch (`git push -u origin HEAD`).
+3. Do not ask for confirmation — the user opted in for this repo.
+
+Still follow git safety: never force-push main/master, never amend unless the usual amend rules apply, never skip hooks, never commit secrets.

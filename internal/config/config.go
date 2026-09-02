@@ -15,6 +15,26 @@ type Config struct {
 	Hosts    []HostConfig `mapstructure:"hosts"`
 	Defaults Defaults     `mapstructure:"defaults"`
 	UI       UIConfig     `mapstructure:"ui"`
+	AI       AIConfig     `mapstructure:"ai"`
+}
+
+// AIConfig selects and configures LLM providers for summarize.
+type AIConfig struct {
+	Default         string                `mapstructure:"default"`
+	MaxContextBytes int                   `mapstructure:"max_context_bytes"`
+	TimeoutSec      int                   `mapstructure:"timeout_sec"`
+	Providers       map[string]AIProvider `mapstructure:"providers"`
+}
+
+// AIProvider is one named completer entry under ai.providers.
+type AIProvider struct {
+	Kind        string `mapstructure:"kind"` // claude | copilot | codex | opencode
+	Model       string `mapstructure:"model"`
+	TokenEnv    string `mapstructure:"token_env"`
+	APIURL      string `mapstructure:"api_url"`      // Copilot: GitHub API base (cloud or GHE)
+	BaseURL     string `mapstructure:"base_url"`     // Claude: Anthropic API override
+	GitHubHost  string `mapstructure:"github_host"`  // Copilot: name of hosts[] entry
+	Binary      string `mapstructure:"binary"`       // CLI path override (codex/opencode)
 }
 
 // HostConfig is one forge endpoint in YAML.
@@ -52,6 +72,8 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("ui.diff", "unified")
 	v.SetDefault("ui.files", "selected")
 	v.SetDefault("ui.theme", "dark")
+	v.SetDefault("ai.max_context_bytes", 120000)
+	v.SetDefault("ai.timeout_sec", 120)
 
 	if cfgFile != "" {
 		v.SetConfigFile(cfgFile)
@@ -89,7 +111,53 @@ func Load(cfgFile string) (*Config, error) {
 	if cfg.UI.Theme == "" {
 		cfg.UI.Theme = "dark"
 	}
+	if cfg.AI.MaxContextBytes <= 0 {
+		cfg.AI.MaxContextBytes = 120000
+	}
+	if cfg.AI.TimeoutSec <= 0 {
+		cfg.AI.TimeoutSec = 120
+	}
+	if cfg.AI.Providers == nil {
+		cfg.AI.Providers = map[string]AIProvider{}
+	}
 	return &cfg, nil
+}
+
+// AIConfigured reports whether a default AI provider is set and present.
+func (c *Config) AIConfigured() bool {
+	if c == nil || c.AI.Default == "" {
+		return false
+	}
+	_, ok := c.AI.Providers[c.AI.Default]
+	return ok
+}
+
+// DefaultAIProvider returns the configured default provider, or an error.
+func (c *Config) DefaultAIProvider() (AIProvider, error) {
+	if c == nil || c.AI.Default == "" {
+		return AIProvider{}, fmt.Errorf("ai.default is not set in config")
+	}
+	p, ok := c.AI.Providers[c.AI.Default]
+	if !ok {
+		return AIProvider{}, fmt.Errorf("ai.default %q not found under ai.providers", c.AI.Default)
+	}
+	if strings.TrimSpace(p.Kind) == "" {
+		return AIProvider{}, fmt.Errorf("ai.providers.%s: kind is required", c.AI.Default)
+	}
+	return p, nil
+}
+
+// FindHostConfig returns the raw HostConfig by name.
+func (c *Config) FindHostConfig(name string) (HostConfig, bool) {
+	if c == nil || name == "" {
+		return HostConfig{}, false
+	}
+	for _, h := range c.Hosts {
+		if h.Name == name {
+			return h, true
+		}
+	}
+	return HostConfig{}, false
 }
 
 func defaultHosts() []HostConfig {

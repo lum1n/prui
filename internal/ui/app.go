@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -11,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/vegard/prui/internal/ai"
 	"github.com/vegard/prui/internal/config"
 	"github.com/vegard/prui/internal/diff"
 	"github.com/vegard/prui/internal/domain"
@@ -132,6 +134,11 @@ type Model struct {
 	diffCache map[string]*domain.FileDiff
 	flat      []flatRow
 	allGen    int // bumps to cancel in-flight all-file loads
+
+	summary      string
+	summaryErr   string
+	summarizing  bool
+	summaryGen   int // bumps to ignore stale summarize results
 }
 
 type loadedPRsMsg struct {
@@ -163,6 +170,13 @@ type loadedTasksMsg struct {
 }
 type taskToggledMsg struct {
 	err error
+}
+type loadedSummaryMsg struct {
+	gen     int
+	text    string
+	err     error
+	kind    string
+	model   string
 }
 
 // NewModel creates the root TUI model.
@@ -227,8 +241,9 @@ const defaultHelp = `Keys
   v         toggle range select
   y         yank plain code (cursor line or range)
   r         submit review
-  p         PR overview (status · tasks · description · conversation)
+  p         PR overview (status · tasks · description · summary · conversation)
   C         PR overview → conversation section
+  S         AI summarize (config ai.default)
   d         toggle unified/split layout
   a         toggle this-file / all-files view
   [ ]       prev/next hunk
@@ -239,12 +254,12 @@ const defaultHelp = `Keys
 
 Inline comment: enter save, esc cancel
 Diff thread: ,/. or 1-9 pick target · R reply
-Overview: tab section · j/k · space toggle task · R reply · c new
+Overview: tab section · j/k · space toggle task · S summarize · R reply · c new
 
 Views
   this-file   only the selected path (default)
   all-files   every path in one scroll; file list + section headers track focus
-  overview    status, tasks, description, conversation (key p)`
+  overview    status, tasks, description, summary, conversation (key p)`
 
 func (m Model) Init() tea.Cmd {
 	if m.opts.PRNumber > 0 {
@@ -371,6 +386,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenReview
 		m.diffCache = map[string]*domain.FileDiff{}
 		m.flat = nil
+		m.summary = ""
+		m.summaryErr = ""
+		m.summarizing = false
+		m.summaryGen++
 		m.refreshFileList()
 		m.status = fmt.Sprintf("PR #%d — %s", m.pr.Ref.Number, m.pr.Title)
 		if len(m.files) == 0 {
@@ -496,6 +515,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.status = "Task updated"
 		return m, m.loadTasks()
+
+	case loadedSummaryMsg:
+		if msg.gen != m.summaryGen {
+			return m, nil
+		}
+		m.summarizing = false
+		m.loading = false
+		if msg.err != nil {
+			m.summaryErr = msg.err.Error()
+			m.summary = ""
+			m.status = "Summarize failed: " + msg.err.Error()
+		} else {
+			m.summaryErr = ""
+			m.summary = msg.text
+			label := msg.kind
+			if msg.model != "" {
+				label += "/" + msg.model
+			}
+			m.status = "Summarized with " + label
+		}
+		m.overviewSec = sectionSummary
+		m.screen = screenOverview
+		m.renderOverview()
+		return m, nil
 	}
 
 	switch m.screen {
@@ -600,6 +643,33 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			m.renderOverview()
 			return m, m.loadTasks()
+		case "S":
+			if m.pr == nil {
+				m.status = "No PR loaded"
+				return m, nil
+			}
+			if m.opts.Config == nil || !m.opts.Config.AIConfigured() {
+				m.status = "AI not configured — set ai.default and ai.providers in config.yaml"
+				return m, nil
+			}
+			if m.summarizing {
+				m.status = "Already summarizing…"
+				return m, nil
+			}
+			m.summaryGen++
+			m.summarizing = true
+			m.summaryErr = ""
+			m.overviewSec = sectionSummary
+			m.screen = screenOverview
+			m.loading = true
+			prov, _ := m.opts.Config.DefaultAIProvider()
+			label := prov.Kind
+			if prov.Model != "" {
+				label += "/" + prov.Model
+			}
+			m.status = "Summarizing with " + label + "…"
+			m.renderOverview()
+			return m, m.loadSummary(m.summaryGen)
 		case "d":
 			m.splitDiff = !m.splitDiff
 			m.renderDiff()
@@ -1009,6 +1079,58 @@ func (m Model) toggleSelectedTask() tea.Cmd {
 	}
 }
 
+func (m Model) loadSummary(gen int) tea.Cmd {
+	cfg := m.opts.Config
+	host := m.opts.Host
+	pr := m.pr
+	files := append([]domain.FileChange(nil), m.files...)
+	tasks := append([]domain.Task(nil), m.tasks...)
+	diffs := map[string]string{}
+	for path, fd := range m.diffCache {
+		if fd != nil && fd.Raw != "" {
+			diffs[path] = fd.Raw
+		}
+	}
+	for _, f := range files {
+		if _, ok := diffs[f.Path]; !ok && f.Patch != "" {
+			diffs[f.Path] = f.Patch
+		}
+	}
+	return func() tea.Msg {
+		p, err := cfg.DefaultAIProvider()
+		if err != nil {
+			return loadedSummaryMsg{gen: gen, err: err}
+		}
+		completer, err := ai.New(ai.Options{
+			Provider:   p,
+			Config:     cfg,
+			ActiveHost: host,
+		})
+		if err != nil {
+			return loadedSummaryMsg{gen: gen, err: err, kind: p.Kind, model: p.Model}
+		}
+		user := ai.PackContext(ai.ContextInput{
+			PR:              pr,
+			Files:           files,
+			Tasks:           tasks,
+			Diffs:           diffs,
+			MaxContextBytes: cfg.AI.MaxContextBytes,
+		})
+		timeout := cfg.AI.TimeoutSec
+		if timeout <= 0 {
+			timeout = 120
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+		defer cancel()
+		text, err := completer.Complete(ctx, ai.Request{
+			System: ai.SystemPrompt,
+			User:   user,
+			Model:  p.Model,
+		})
+		return loadedSummaryMsg{gen: gen, text: text, err: err, kind: completer.Kind(), model: p.Model}
+	}
+}
+
 func (m Model) updateOverview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.commenting {
 		return m.updateInlineComment(msg)
@@ -1048,7 +1170,7 @@ func (m Model) updateOverview(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.convCursor = (m.convCursor + 1) % len(entries)
 				m.renderOverview()
 				return m, nil
-			case sectionDescription:
+			case sectionDescription, sectionSummary:
 				m.bodyVP.LineDown(1)
 				return m, nil
 			}
@@ -1068,7 +1190,7 @@ func (m Model) updateOverview(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.convCursor = (m.convCursor - 1 + len(entries)) % len(entries)
 				m.renderOverview()
 				return m, nil
-			case sectionDescription:
+			case sectionDescription, sectionSummary:
 				m.bodyVP.LineUp(1)
 				return m, nil
 			}
@@ -1140,6 +1262,33 @@ func (m Model) updateOverview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.renderOverview()
 			return m, nil
+		case "S":
+			if m.pr == nil {
+				m.status = "No PR loaded"
+				return m, nil
+			}
+			if m.opts.Config == nil || !m.opts.Config.AIConfigured() {
+				m.status = "AI not configured — set ai.default and ai.providers in config.yaml"
+				return m, nil
+			}
+			if m.summarizing {
+				m.status = "Already summarizing…"
+				return m, nil
+			}
+			m.summaryGen++
+			m.summarizing = true
+			m.summaryErr = ""
+			m.overviewSec = sectionSummary
+			m.screen = screenOverview
+			m.loading = true
+			prov, _ := m.opts.Config.DefaultAIProvider()
+			label := prov.Kind
+			if prov.Model != "" {
+				label += "/" + prov.Model
+			}
+			m.status = "Summarizing with " + label + "…"
+			m.renderOverview()
+			return m, m.loadSummary(m.summaryGen)
 		}
 	}
 	var cmd tea.Cmd
@@ -1707,7 +1856,14 @@ func (m *Model) renderOverview() {
 		raw = m.pr.Body
 	}
 	desc := renderMarkdown(raw, m.width-4)
-	content := formatOverview(m.pr, m.tasks, m.taskCursor, entries, m.convCursor, m.overviewSec, desc, m.width-2)
+	sum := ""
+	if strings.TrimSpace(m.summary) != "" {
+		sum = renderMarkdown(m.summary, m.width-4)
+	}
+	content := formatOverview(
+		m.pr, m.tasks, m.taskCursor, entries, m.convCursor, m.overviewSec,
+		desc, sum, m.summaryErr, m.summarizing, m.width-2,
+	)
 	m.bodyVP.SetContent(content)
 }
 
@@ -1984,11 +2140,13 @@ func (m Model) reviewHelpLine() string {
 		switch m.overviewSec {
 		case sectionDescription:
 			sec = "description"
+		case sectionSummary:
+			sec = "summary"
 		case sectionConversation:
 			sec = "conversation"
 		}
 		open := openTaskCount(m.tasks)
-		return fmt.Sprintf("overview · %s · tab section · j/k · space toggle task · R reply · c add · %d open tasks · p/esc back", sec, open)
+		return fmt.Sprintf("overview · %s · tab section · j/k · space toggle · S summarize · R reply · c add · %d open tasks · p/esc back", sec, open)
 	}
 	if m.commenting {
 		if m.editingID != "" {
@@ -2014,7 +2172,7 @@ func (m Model) reviewHelpLine() string {
 	open := openTaskCount(m.tasks)
 	nConv := len(conversationComments(m.comments))
 	return fmt.Sprintf(
-		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · ,/.|# target · R reply · e edit · x del · v range · y yank · a %s · d %s · p overview(%d/%d) · r submit · O open · ? · q",
+		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · ,/.|# target · R reply · e edit · x del · v range · y yank · a %s · d %s · p overview(%d/%d) · S summarize · r submit · O open · ? · q",
 		pane, view, layout, open, nConv,
 	)
 }

@@ -33,8 +33,8 @@ func TestFormatTasksSection(t *testing.T) {
 
 func TestFormatOverview(t *testing.T) {
 	pr := &domain.PullRequest{Title: "Add feature", State: "open"}
-	out := formatOverview(pr, nil, 0, nil, 0, sectionDescription, "hello body", 60)
-	for _, part := range []string{"Add feature", "open", "Tasks", "Description", "Conversation", "hello body"} {
+	out := formatOverview(pr, nil, 0, nil, 0, sectionDescription, "hello body", "", "", false, 60)
+	for _, part := range []string{"Add feature", "open", "Tasks", "Description", "Summary", "Conversation", "hello body"} {
 		if !strings.Contains(out, part) {
 			t.Fatalf("missing %q in:\n%s", part, out)
 		}

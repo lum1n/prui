@@ -62,6 +62,22 @@ ui:
   diff: unified   # unified | split
   files: selected # selected | all
   theme: dark
+
+# Optional AI summarize (key S). Selection is config-only — no in-app picker.
+ai:
+  default: claude
+  max_context_bytes: 120000
+  timeout_sec: 120
+  providers:
+    claude:
+      kind: claude
+      model: claude-sonnet-4-5
+      token_env: ANTHROPIC_API_KEY
+    # copilot (github.com or GHE via github_host / api_url):
+    #   kind: copilot
+    #   model: gpt-4.1
+    #   github_host: work-ghe
+    # codex / opencode use local CLIs (codex exec / opencode run)
 ```
 
 Auth is never stored in the config file. For on-prem hosts without API tokens, set `cookie_env` to an env var that holds a browser session `Cookie` header value (DevTools → Network → copy request Cookie). A leading `Cookie:` prefix is stripped if present.
@@ -99,8 +115,9 @@ prui pr list owner/repo
 | `Tab` | Files ↔ diff |
 | `Enter` | Open PR / load file |
 | `c` | New comment on line |
-| `p` | PR overview (status, tasks, description, conversation) |
+| `p` | PR overview (status, tasks, description, summary, conversation) |
 | `C` | Overview focused on conversation |
+| `S` | AI summarize (uses `ai.default` from config) |
 | `R` | Reply to selected comment (diff target / overview conversation) |
 | `,` / `.` | Prev/next reply target on the cursor line |
 | `1`–`9` | Jump to reply target `#N` on the cursor line |
@@ -115,7 +132,7 @@ prui pr list owner/repo
 | `?` | Help |
 | `q` | Back / quit |
 
-Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): `tab` switches Tasks / Description / Conversation; on Tasks, `space`/`enter` toggles; on Conversation, `j`/`k` + `R`/`c` as before. Yank (`y`): copies source text only (no line numbers or diff chrome) for the cursor line, or the `v` range.
+Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): `tab` switches Tasks / Description / Summary / Conversation; on Tasks, `space`/`enter` toggles; on Conversation, `j`/`k` + `R`/`c` as before. Press `S` to summarize with the configured AI provider. Yank (`y`): copies source text only (no line numbers or diff chrome) for the cursor line, or the `v` range.
 
 ## Architecture
 

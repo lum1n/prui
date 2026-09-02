@@ -41,3 +41,32 @@ ui:
   diff: unified   # unified | split
   files: selected # selected | all
   theme: dark
+
+# Optional: AI summarize (key S). Selection is config-only.
+ai:
+  default: claude
+  max_context_bytes: 120000
+  timeout_sec: 120
+  providers:
+    claude:
+      kind: claude
+      model: claude-sonnet-4-5
+      token_env: ANTHROPIC_API_KEY
+    copilot:
+      kind: copilot
+      model: gpt-4.1
+      # token_env: GITHUB_TOKEN   # or leave empty to reuse forge github token / gh
+    copilot-ghe:
+      kind: copilot
+      model: gpt-4.1
+      github_host: work-ghe       # reuse that host's api_url + token/cookie
+      # api_url: https://ghe.example.com/api/v3
+      # token_env: GHE_TOKEN
+    codex:
+      kind: codex
+      model: ""                   # optional --model for codex exec
+      # binary: codex
+    opencode:
+      kind: opencode
+      model: ""                   # optional model override for opencode run
+      # binary: opencode

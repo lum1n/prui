@@ -13,15 +13,17 @@ type overviewSection int
 const (
 	sectionTasks overviewSection = iota
 	sectionDescription
+	sectionSummary
 	sectionConversation
+	overviewSectionCount
 )
 
 func (s overviewSection) next() overviewSection {
-	return overviewSection((int(s) + 1) % 3)
+	return overviewSection((int(s) + 1) % int(overviewSectionCount))
 }
 
 func (s overviewSection) prev() overviewSection {
-	return overviewSection((int(s) + 2) % 3)
+	return overviewSection((int(s) + int(overviewSectionCount) - 1) % int(overviewSectionCount))
 }
 
 func formatPRStatus(pr *domain.PullRequest, tasks []domain.Task) string {
@@ -136,6 +138,29 @@ func formatConversationSection(entries []convEntry, cursor int, active bool, wid
 	return b.String()
 }
 
+func formatSummarySection(summary, summaryErr string, summarizing, active bool) string {
+	var b strings.Builder
+	b.WriteString(sectionHeader("Summary", active))
+	b.WriteByte('\n')
+	switch {
+	case summarizing:
+		b.WriteString(mutedStyle.Render("  Summarizing…"))
+		b.WriteByte('\n')
+	case summaryErr != "":
+		b.WriteString(errorStyle.Render("  " + summaryErr))
+		b.WriteByte('\n')
+	case strings.TrimSpace(summary) == "":
+		b.WriteString(mutedStyle.Render("  Press S to summarize (configure ai: in config.yaml)"))
+		b.WriteByte('\n')
+	default:
+		b.WriteString(summary)
+		if !strings.HasSuffix(summary, "\n") {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
 func formatOverview(
 	pr *domain.PullRequest,
 	tasks []domain.Task,
@@ -144,6 +169,9 @@ func formatOverview(
 	convCursor int,
 	sec overviewSection,
 	description string,
+	summary string,
+	summaryErr string,
+	summarizing bool,
 	width int,
 ) string {
 	if width < 40 {
@@ -158,7 +186,7 @@ func formatOverview(
 	b.WriteString("\n")
 	b.WriteString(formatPRStatus(pr, tasks))
 	b.WriteString("\n")
-	b.WriteString(mutedStyle.Render("tab section · esc back"))
+	b.WriteString(mutedStyle.Render("tab section · S summarize · esc back"))
 	b.WriteString("\n\n")
 
 	b.WriteString(formatTasksSection(tasks, taskCursor, sec == sectionTasks, width))
@@ -175,6 +203,9 @@ func formatOverview(
 			b.WriteByte('\n')
 		}
 	}
+	b.WriteByte('\n')
+
+	b.WriteString(formatSummarySection(summary, summaryErr, summarizing, sec == sectionSummary))
 	b.WriteByte('\n')
 
 	b.WriteString(formatConversationSection(entries, convCursor, sec == sectionConversation, width))

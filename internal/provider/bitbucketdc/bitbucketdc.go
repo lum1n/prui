@@ -246,23 +246,7 @@ func (c *Client) SubmitReview(ctx context.Context, ref domain.PRRef, draft domai
 	for _, d := range draft.Comments {
 		body := map[string]any{"text": d.Body}
 		if d.Anchor != nil {
-			lineType := string(d.Anchor.LineType)
-			if lineType == "" {
-				if d.Anchor.Side == domain.SideLeft {
-					lineType = "REMOVED"
-				} else {
-					lineType = "ADDED"
-				}
-			}
-			body["anchor"] = map[string]any{
-				"path":     d.Anchor.Path,
-				"line":     d.Anchor.Line,
-				"lineType": lineType,
-				"fileType": "FROM",
-			}
-			if d.Anchor.Side == domain.SideRight {
-				body["anchor"].(map[string]any)["fileType"] = "TO"
-			}
+			body["anchor"] = buildDCAnchor(d.Anchor)
 		}
 		if _, err := httputil.DoJSON(ctx, c.http, http.MethodPost, c.prPath(ref)+"/comments", c.headers(), body, nil); err != nil {
 			return fmt.Errorf("post comment: %w", err)
@@ -278,6 +262,58 @@ func (c *Client) SubmitReview(ctx context.Context, ref domain.PRRef, draft domai
 		return c.Approve(ctx, ref)
 	}
 	return nil
+}
+
+// buildDCAnchor maps a domain anchor to Bitbucket DC's comment anchor.
+// Multi-line ranges (DC ≥ 9.3) use multilineMarker + multilineSpan; line is the end.
+func buildDCAnchor(a *domain.Anchor) map[string]any {
+	lineType := string(a.LineType)
+	if lineType == "" {
+		if a.Side == domain.SideLeft {
+			lineType = "REMOVED"
+		} else {
+			lineType = "ADDED"
+		}
+	}
+	fileType := "TO"
+	if a.Side == domain.SideLeft || lineType == "REMOVED" {
+		fileType = "FROM"
+	}
+
+	start, end := a.Line, a.EndLine
+	if end <= 0 || end < start {
+		end = start
+	}
+	if start <= 0 {
+		start = end
+	}
+
+	anchor := map[string]any{
+		"path":     a.Path,
+		"diffType": "EFFECTIVE",
+		"line":     end,
+		"lineType": lineType,
+		"fileType": fileType,
+	}
+	if end > start {
+		// Marker sits on the first line; `line` is the last line of the span.
+		anchor["multilineMarker"] = map[string]any{
+			"startLine":     start,
+			"startLineType": lineType,
+		}
+		if fileType == "FROM" {
+			anchor["multilineSpan"] = map[string]any{
+				"srcSpanStart": start,
+				"srcSpanEnd":   end,
+			}
+		} else {
+			anchor["multilineSpan"] = map[string]any{
+				"dstSpanStart": start,
+				"dstSpanEnd":   end,
+			}
+		}
+	}
+	return anchor
 }
 
 func (c *Client) Approve(ctx context.Context, ref domain.PRRef) error {
@@ -506,13 +542,21 @@ type dcComment struct {
 		DisplayName string `json:"displayName"`
 		Slug        string `json:"slug"`
 	} `json:"author"`
-	Anchor *struct {
-		Path     string `json:"path"`
-		Line     int    `json:"line"`
-		LineType string `json:"lineType"`
-		FileType string `json:"fileType"`
-	} `json:"anchor"`
+	Anchor *dcCommentAnchor `json:"anchor"`
 	CreatedDate int64 `json:"createdDate"`
+}
+
+type dcCommentAnchor struct {
+	Path            string             `json:"path"`
+	Line            int                `json:"line"`
+	LineType        string             `json:"lineType"`
+	FileType        string             `json:"fileType"`
+	MultilineMarker *dcMultilineMarker `json:"multilineMarker"`
+}
+
+type dcMultilineMarker struct {
+	StartLine     int    `json:"startLine"`
+	StartLineType string `json:"startLineType"`
 }
 
 func (cm dcComment) toDomain() domain.Comment {
@@ -533,12 +577,20 @@ func (cm dcComment) toDomain() domain.Comment {
 		if cm.Anchor.FileType == "FROM" || lt == domain.LineRemoved {
 			side = domain.SideLeft
 		}
-		c.Anchor = &domain.Anchor{
+		a := &domain.Anchor{
 			Path:     cm.Anchor.Path,
 			Side:     side,
 			Line:     cm.Anchor.Line,
 			LineType: lt,
 		}
+		if m := cm.Anchor.MultilineMarker; m != nil && m.StartLine > 0 && m.StartLine < cm.Anchor.Line {
+			a.Line = m.StartLine
+			a.EndLine = cm.Anchor.Line
+			if m.StartLineType != "" {
+				a.LineType = domain.LineType(m.StartLineType)
+			}
+		}
+		c.Anchor = a
 	}
 	return c
 }

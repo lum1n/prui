@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/vegard/prui/internal/domain"
 )
 
 func TestDCDiffLineIsContent(t *testing.T) {
@@ -95,6 +97,47 @@ func TestEncodeDiffPath(t *testing.T) {
 	}
 	if !strings.Contains(urls[1], "/diff/envs/%2Eenv%2Edevelopment") {
 		t.Fatalf("path form: %v", urls[1])
+	}
+}
+
+func TestBuildDCAnchorMultiline(t *testing.T) {
+	a := buildDCAnchor(&domain.Anchor{
+		Path: "envs/.env", Side: domain.SideRight,
+		Line: 10, EndLine: 18, LineType: domain.LineAdded,
+	})
+	if a["line"] != 18 {
+		t.Fatalf("end line: %v", a["line"])
+	}
+	marker, ok := a["multilineMarker"].(map[string]any)
+	if !ok || marker["startLine"] != 10 {
+		t.Fatalf("marker: %v", a["multilineMarker"])
+	}
+	span, ok := a["multilineSpan"].(map[string]any)
+	if !ok || span["dstSpanStart"] != 10 || span["dstSpanEnd"] != 18 {
+		t.Fatalf("span: %v", a["multilineSpan"])
+	}
+	single := buildDCAnchor(&domain.Anchor{
+		Path: "a.go", Side: domain.SideLeft, Line: 3, LineType: domain.LineRemoved,
+	})
+	if _, ok := single["multilineMarker"]; ok {
+		t.Fatal("single-line should not set multilineMarker")
+	}
+	if single["fileType"] != "FROM" || single["line"] != 3 {
+		t.Fatalf("%v", single)
+	}
+}
+
+func TestDCCommentToDomainMultiline(t *testing.T) {
+	cm := dcComment{
+		ID: 1, Text: "range",
+		Anchor: &dcCommentAnchor{
+			Path: "a.go", Line: 18, LineType: "ADDED", FileType: "TO",
+			MultilineMarker: &dcMultilineMarker{StartLine: 10, StartLineType: "ADDED"},
+		},
+	}
+	c := cm.toDomain()
+	if c.Anchor == nil || c.Anchor.Line != 10 || c.Anchor.EndLine != 18 {
+		t.Fatalf("%+v", c.Anchor)
 	}
 }
 

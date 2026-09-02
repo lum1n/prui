@@ -115,7 +115,8 @@ func TestCopilotCloudAndGHE(t *testing.T) {
 					http.Error(w, "need cookie", 401)
 					return
 				}
-			} else if !strings.Contains(r.Header.Get("Authorization"), "token ") {
+		} else if !strings.Contains(r.Header.Get("Authorization"), "gho_x") &&
+				!strings.Contains(r.Header.Get("Authorization"), "token ") {
 				http.Error(w, "need token", 401)
 				return
 			}

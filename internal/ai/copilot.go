@@ -99,10 +99,15 @@ func (c *copilot) Complete(ctx context.Context, req Request) (string, error) {
 
 func (c *copilot) session(ctx context.Context) (copilotSession, error) {
 	// Prefer token exchange (Business/Enterprise); fall back to /user discovery + GitHub token.
-	if sess, err := c.exchangeToken(ctx); err == nil {
+	sess, exchErr := c.exchangeToken(ctx)
+	if exchErr == nil {
 		return sess, nil
 	}
-	return c.discoverUser(ctx)
+	sess, userErr := c.discoverUser(ctx)
+	if userErr == nil {
+		return sess, nil
+	}
+	return copilotSession{}, fmt.Errorf("copilot auth failed (api %s): exchange: %v; user: %w", c.githubAPI, exchErr, userErr)
 }
 
 func (c *copilot) exchangeToken(ctx context.Context) (copilotSession, error) {
@@ -122,7 +127,7 @@ func (c *copilot) exchangeToken(ctx context.Context) (copilotSession, error) {
 		return copilotSession{}, err
 	}
 	if resp.StatusCode >= 300 {
-		return copilotSession{}, fmt.Errorf("copilot token: HTTP %d: %s", resp.StatusCode, truncateErr(data))
+		return copilotSession{}, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncateErr(data))
 	}
 	var out struct {
 		Token     string `json:"token"`
@@ -135,7 +140,7 @@ func (c *copilot) exchangeToken(ctx context.Context) (copilotSession, error) {
 		return copilotSession{}, err
 	}
 	if out.Token == "" {
-		return copilotSession{}, fmt.Errorf("copilot token: empty token")
+		return copilotSession{}, fmt.Errorf("empty token")
 	}
 	chat := strings.TrimSpace(out.Endpoints.API)
 	if chat == "" {
@@ -164,7 +169,7 @@ func (c *copilot) discoverUser(ctx context.Context) (copilotSession, error) {
 		return copilotSession{}, err
 	}
 	if resp.StatusCode >= 300 {
-		return copilotSession{}, fmt.Errorf("copilot user: HTTP %d: %s", resp.StatusCode, truncateErr(data))
+		return copilotSession{}, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncateErr(data))
 	}
 	var out struct {
 		Endpoints struct {
@@ -184,7 +189,7 @@ func (c *copilot) discoverUser(ctx context.Context) (copilotSession, error) {
 	}
 	token := c.cred.Token
 	if token == "" {
-		return copilotSession{}, fmt.Errorf("copilot: cookie auth cannot call chat without session token; set token_env")
+		return copilotSession{}, fmt.Errorf("cookie auth cannot call chat without session token; set token_env")
 	}
 	return copilotSession{token: token, chatAPI: chat}, nil
 }
@@ -195,7 +200,22 @@ func (c *copilot) applyGitHubAuth(req *http.Request) {
 		return
 	}
 	if c.cred.Token != "" {
-		req.Header.Set("Authorization", "token "+c.cred.Token)
+		req.Header.Set("Authorization", githubAuthHeader(c.cred.Token))
+	}
+}
+
+// githubAuthHeader picks Bearer for OAuth/fine-grained tokens (gh auth), else classic "token".
+func githubAuthHeader(tok string) string {
+	tok = strings.TrimSpace(tok)
+	lower := strings.ToLower(tok)
+	switch {
+	case strings.HasPrefix(lower, "gho_"),
+		strings.HasPrefix(lower, "ghu_"),
+		strings.HasPrefix(lower, "ghs_"),
+		strings.HasPrefix(lower, "github_pat_"):
+		return "Bearer " + tok
+	default:
+		return "token " + tok
 	}
 }
 

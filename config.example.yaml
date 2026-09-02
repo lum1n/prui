@@ -1,0 +1,39 @@
+# Example prui config — copy to ~/.config/prui/config.yaml
+
+hosts:
+  - name: github
+    kind: github
+    base_url: https://github.com
+    api_url: https://api.github.com/
+    token_env: GITHUB_TOKEN
+
+  - name: work-ghe
+    kind: github
+    base_url: https://ghe.example.com
+    api_url: https://ghe.example.com/api/v3
+    # Prefer cookie auth when the company does not issue PATs:
+    cookie_env: GHE_COOKIE
+    # token_env: GHE_TOKEN
+    # ca_cert: /etc/ssl/certs/corp-ca.pem
+
+  - name: bitbucket
+    kind: bitbucket_cloud
+    base_url: https://bitbucket.org
+    api_url: https://api.bitbucket.org/2.0
+    token_env: BITBUCKET_TOKEN
+    username: yourname
+
+  - name: work-bb
+    kind: bitbucket_dc
+    base_url: https://bitbucket.example.com
+    api_url: https://bitbucket.example.com/rest/api/1.0
+    cookie_env: BB_COOKIE
+    # token_env: BB_TOKEN
+    # username: yourname
+
+defaults:
+  host: github
+
+ui:
+  diff: unified
+  theme: dark

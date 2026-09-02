@@ -882,22 +882,54 @@ func (m *Model) selectedAnchor() *domain.Anchor {
 	}
 	line := row.fd.Lines[row.line]
 	a := line.Anchor
-	if !m.showAll && m.rangeStart >= 0 && m.rangeStart != m.cursorLine && m.fileDiff != nil {
-		start, end := m.rangeStart, m.cursorLine
-		if start > end {
-			start, end = end, start
+	if m.rangeStart < 0 || m.rangeStart == m.cursorLine {
+		return &a
+	}
+
+	// Resolve start/end rows across this-file and all-files views.
+	startIdx, endIdx := m.rangeStart, m.cursorLine
+	if startIdx > endIdx {
+		startIdx, endIdx = endIdx, startIdx
+	}
+	var startLine, endLine domain.DiffLine
+	if m.showAll {
+		if startIdx < 0 || endIdx >= len(m.flat) {
+			return &a
 		}
-		if start >= 0 && end < len(m.fileDiff.Lines) {
-			sa := m.fileDiff.Lines[start].Anchor
-			ea := m.fileDiff.Lines[end].Anchor
-			a.Line = sa.Line
-			a.EndLine = ea.Line
-			if a.EndLine < a.Line {
-				a.Line, a.EndLine = a.EndLine, a.Line
-			}
+		sr, er := m.flat[startIdx], m.flat[endIdx]
+		if sr.header || er.header || sr.fd == nil || er.fd == nil || sr.path != er.path {
+			// Range must stay within one file.
+			return &a
 		}
+		startLine = sr.fd.Lines[sr.line]
+		endLine = er.fd.Lines[er.line]
+	} else {
+		if m.fileDiff == nil || startIdx < 0 || endIdx >= len(m.fileDiff.Lines) {
+			return &a
+		}
+		startLine = m.fileDiff.Lines[startIdx]
+		endLine = m.fileDiff.Lines[endIdx]
+	}
+	a.Line = startLine.Anchor.Line
+	a.EndLine = endLine.Anchor.Line
+	if a.EndLine < a.Line {
+		a.Line, a.EndLine = a.EndLine, a.Line
+	}
+	// Prefer the side of the end (cursor) line when mixed; keep start side if empty.
+	if a.Side == "" {
+		a.Side = startLine.Anchor.Side
 	}
 	return &a
+}
+
+func anchorHint(a *domain.Anchor) string {
+	if a == nil || a.Line <= 0 {
+		return ""
+	}
+	if a.EndLine > a.Line {
+		return fmt.Sprintf(" lines %d–%d", a.Line, a.EndLine)
+	}
+	return fmt.Sprintf(" line %d", a.Line)
 }
 
 func (m *Model) moveCursor(delta int) {
@@ -1241,13 +1273,9 @@ func (m Model) View() string {
 		leftInner := m.fileList.View()
 		rightInner := m.diffVP.View()
 		if m.commenting {
-			anchorHint := ""
-			if a := m.selectedAnchor(); a != nil {
-				anchorHint = fmt.Sprintf(" line %d", a.Line)
-			}
-			label := "✎ comment" + anchorHint + "  (enter save · esc cancel)"
+			label := "✎ comment" + anchorHint(m.selectedAnchor()) + "  (enter save · esc cancel)"
 			if m.editingID != "" {
-				label = "✎ edit draft" + anchorHint + "  (enter save · esc cancel)"
+				label = "✎ edit draft" + anchorHint(m.selectedAnchor()) + "  (enter save · esc cancel)"
 			}
 			box := lipgloss.JoinVertical(lipgloss.Left,
 				draftStyle.Render(label),

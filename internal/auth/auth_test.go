@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/vegard/prui/internal/auth"
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/auth"
+	"github.com/lum1n/prui/internal/domain"
 )
 
 func TestResolveCookiePreferred(t *testing.T) {

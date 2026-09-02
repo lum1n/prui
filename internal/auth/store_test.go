@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/vegard/prui/internal/auth"
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/auth"
+	"github.com/lum1n/prui/internal/domain"
 )
 
 func TestStoreRoundTrip(t *testing.T) {

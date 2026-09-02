@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/vegard/prui/internal/auth"
+	"github.com/lum1n/prui/internal/auth"
 )
 
 type copilot struct {

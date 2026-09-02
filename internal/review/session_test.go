@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/vegard/prui/internal/domain"
-	"github.com/vegard/prui/internal/review"
+	"github.com/lum1n/prui/internal/domain"
+	"github.com/lum1n/prui/internal/review"
 )
 
 func TestSessionPersist(t *testing.T) {

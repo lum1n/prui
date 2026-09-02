@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/domain"
 )
 
 var checklistRE = regexp.MustCompile(`(?m)^(\s*(?:[-*+]|\d+\.)\s+)\[([ xX])\](\s+.*)$`)

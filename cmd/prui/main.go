@@ -1,6 +1,6 @@
 package main
 
-import "github.com/vegard/prui/cmd"
+import "github.com/lum1n/prui/cmd"
 
 func main() {
 	cmd.Execute()

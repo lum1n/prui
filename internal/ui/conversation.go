@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/domain"
 )
 
 // isConversationComment is a PR discussion comment not tied to a diff line.

@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/domain"
 )
 
 // Config is the loaded application configuration.

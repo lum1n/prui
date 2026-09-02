@@ -6,12 +6,12 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/vegard/prui/internal/auth"
-	"github.com/vegard/prui/internal/config"
-	"github.com/vegard/prui/internal/domain"
-	"github.com/vegard/prui/internal/gitremote"
-	"github.com/vegard/prui/internal/provider"
-	"github.com/vegard/prui/internal/ui"
+	"github.com/lum1n/prui/internal/auth"
+	"github.com/lum1n/prui/internal/config"
+	"github.com/lum1n/prui/internal/domain"
+	"github.com/lum1n/prui/internal/gitremote"
+	"github.com/lum1n/prui/internal/provider"
+	"github.com/lum1n/prui/internal/ui"
 )
 
 var (

@@ -1,4 +1,4 @@
-module github.com/vegard/prui
+module github.com/lum1n/prui
 
 go 1.26.5
 

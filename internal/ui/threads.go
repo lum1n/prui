@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/vegard/prui/internal/diff"
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/diff"
+	"github.com/lum1n/prui/internal/domain"
 )
 
 type threadNode struct {

@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/google/go-github/v69/github"
-	"github.com/vegard/prui/internal/auth"
-	"github.com/vegard/prui/internal/diff"
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/auth"
+	"github.com/lum1n/prui/internal/diff"
+	"github.com/lum1n/prui/internal/domain"
 	"golang.org/x/oauth2"
 )
 

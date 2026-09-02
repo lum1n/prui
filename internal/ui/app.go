@@ -12,12 +12,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/vegard/prui/internal/ai"
-	"github.com/vegard/prui/internal/config"
-	"github.com/vegard/prui/internal/diff"
-	"github.com/vegard/prui/internal/domain"
-	"github.com/vegard/prui/internal/provider"
-	"github.com/vegard/prui/internal/review"
+	"github.com/lum1n/prui/internal/ai"
+	"github.com/lum1n/prui/internal/config"
+	"github.com/lum1n/prui/internal/diff"
+	"github.com/lum1n/prui/internal/domain"
+	"github.com/lum1n/prui/internal/provider"
+	"github.com/lum1n/prui/internal/review"
 )
 
 type screen int

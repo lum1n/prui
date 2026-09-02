@@ -12,7 +12,7 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/muesli/reflow/truncate"
 	"github.com/muesli/reflow/wordwrap"
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/domain"
 )
 
 // Theme controls diff chrome colors (pierre/diffs-inspired, terminal-friendly).

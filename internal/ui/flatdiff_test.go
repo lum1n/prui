@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/domain"
 )
 
 func TestBuildFlatSections(t *testing.T) {

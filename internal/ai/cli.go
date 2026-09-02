@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/vegard/prui/internal/config"
+	"github.com/lum1n/prui/internal/config"
 )
 
 type codex struct {

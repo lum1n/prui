@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vegard/prui/internal/auth"
-	"github.com/vegard/prui/internal/diff"
-	"github.com/vegard/prui/internal/domain"
-	"github.com/vegard/prui/internal/provider/httputil"
+	"github.com/lum1n/prui/internal/auth"
+	"github.com/lum1n/prui/internal/diff"
+	"github.com/lum1n/prui/internal/domain"
+	"github.com/lum1n/prui/internal/provider/httputil"
 )
 
 // Client implements provider.Host for Bitbucket Cloud.

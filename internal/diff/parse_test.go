@@ -3,8 +3,8 @@ package diff_test
 import (
 	"testing"
 
-	"github.com/vegard/prui/internal/diff"
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/diff"
+	"github.com/lum1n/prui/internal/domain"
 )
 
 func TestParseUnified(t *testing.T) {

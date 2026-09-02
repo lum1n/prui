@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/domain"
 )
 
 func TestDCDiffLineIsContent(t *testing.T) {

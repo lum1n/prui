@@ -6,8 +6,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
-	"github.com/vegard/prui/internal/diff"
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/diff"
+	"github.com/lum1n/prui/internal/domain"
 )
 
 func TestPaintUnifiedSmoke(t *testing.T) {

@@ -8,12 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vegard/prui/internal/auth"
-	"github.com/vegard/prui/internal/domain"
-	"github.com/vegard/prui/internal/provider"
-	"github.com/vegard/prui/internal/provider/bitbucketcloud"
-	"github.com/vegard/prui/internal/provider/bitbucketdc"
-	ghprov "github.com/vegard/prui/internal/provider/github"
+	"github.com/lum1n/prui/internal/auth"
+	"github.com/lum1n/prui/internal/domain"
+	"github.com/lum1n/prui/internal/provider"
+	"github.com/lum1n/prui/internal/provider/bitbucketcloud"
+	"github.com/lum1n/prui/internal/provider/bitbucketdc"
+	ghprov "github.com/lum1n/prui/internal/provider/github"
 )
 
 func TestGitHubContract(t *testing.T) {

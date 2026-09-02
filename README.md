@@ -14,10 +14,27 @@ Terminal UI for reviewing pull requests on **GitHub** (cloud + Enterprise) and *
 ## Install
 
 ```bash
-go install github.com/vegard/prui/cmd/prui@latest
-# or from this repo:
-go build -o prui ./cmd/prui
+curl -fsSL https://raw.githubusercontent.com/lum1n/prui/master/install.sh | sh
 ```
+
+Installs to `~/.local/bin/prui` (override with `BINDIR=/usr/local/bin`). Requires a published GitHub Release.
+
+```bash
+go install github.com/lum1n/prui/cmd/prui@latest   # compile from source (Go 1.26+)
+make install                                       # from a clone
+prui version
+```
+
+### Cutting a release
+
+Push a semver tag; GitHub Actions runs GoReleaser (linux/darwin × amd64/arm64):
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Update `internal/version/version.go`’s default `Version` when you want untagged `go build` to report the same number.
 
 ## Quick start
 
@@ -157,6 +174,7 @@ prui --host work-bb PROJECT/repo#7
 prui auth login --hostname ghe.example.com
 prui auth status
 prui pr list owner/repo
+prui version
 ```
 
 ### Review keys

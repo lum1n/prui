@@ -1,4 +1,7 @@
 .DS_Store
 /prui
 *.exe
-dist/
+*.test
+*.out
+/dist/
+/prui_*

@@ -3,9 +3,9 @@ package gitremote_test
 import (
 	"testing"
 
-	"github.com/vegard/prui/internal/config"
-	"github.com/vegard/prui/internal/domain"
-	"github.com/vegard/prui/internal/gitremote"
+	"github.com/lum1n/prui/internal/config"
+	"github.com/lum1n/prui/internal/domain"
+	"github.com/lum1n/prui/internal/gitremote"
 )
 
 func testCfg() *config.Config {

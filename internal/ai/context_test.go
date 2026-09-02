@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vegard/prui/internal/ai"
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/ai"
+	"github.com/lum1n/prui/internal/domain"
 )
 
 func TestPackContextTruncates(t *testing.T) {

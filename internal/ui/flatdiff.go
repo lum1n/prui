@@ -1,6 +1,6 @@
 package ui
 
-import "github.com/vegard/prui/internal/domain"
+import "github.com/lum1n/prui/internal/domain"
 
 // flatRow is one navigable row in the diff pane (file section or diff line).
 type flatRow struct {

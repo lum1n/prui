@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vegard/prui/internal/auth"
-	"github.com/vegard/prui/internal/config"
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/auth"
+	"github.com/lum1n/prui/internal/config"
+	"github.com/lum1n/prui/internal/domain"
 )
 
 // Completer generates text completions.

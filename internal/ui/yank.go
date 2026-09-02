@@ -7,8 +7,8 @@ import (
 
 	"github.com/atotto/clipboard"
 	osc52 "github.com/aymanbagabas/go-osc52/v2"
-	"github.com/vegard/prui/internal/diff"
-	"github.com/vegard/prui/internal/domain"
+	"github.com/lum1n/prui/internal/diff"
+	"github.com/lum1n/prui/internal/domain"
 )
 
 // yankLines returns plain source text for the given diff lines (no gutters,

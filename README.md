@@ -98,6 +98,7 @@ prui pr list owner/repo
 | `Ctrl+d`/`Ctrl+u` | Page down / up (half screen) |
 | `Tab` | Files ↔ diff |
 | `Enter` | Open PR / load file |
+| `c` | New comment on line |
 | `p` | PR overview (status, tasks, description, conversation) |
 | `C` | Overview focused on conversation |
 | `R` | Reply to selected comment (diff target / overview conversation) |
@@ -106,6 +107,7 @@ prui pr list owner/repo
 | `e` | Edit draft on line |
 | `x` | Delete draft on line |
 | `v` | Range select |
+| `y` | Yank plain code (cursor line or visual range; no gutters) |
 | `r` | Submit review |
 | `[`/`]` | Prev/next hunk |
 | `o` | Show PR URL |
@@ -113,7 +115,7 @@ prui pr list owner/repo
 | `?` | Help |
 | `q` | Back / quit |
 
-Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): `tab` switches Tasks / Description / Conversation; on Tasks, `space`/`enter` toggles; on Conversation, `j`/`k` + `R`/`c` as before.
+Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): `tab` switches Tasks / Description / Conversation; on Tasks, `space`/`enter` toggles; on Conversation, `j`/`k` + `R`/`c` as before. Yank (`y`): copies source text only (no line numbers or diff chrome) for the cursor line, or the `v` range.
 
 ## Architecture
 

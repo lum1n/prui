@@ -218,6 +218,7 @@ const defaultHelp = `Keys
   e         edit draft on line
   x         delete draft on line
   v         toggle range select
+  y         yank plain code (cursor line or range)
   r         submit review
   p         PR overview (status · tasks · description · conversation)
   C         PR overview → conversation section
@@ -701,12 +702,24 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "v":
 			if m.rangeStart < 0 {
 				m.rangeStart = m.cursorLine
-				m.status = "Range start set — move and press c"
+				m.status = "Range start set — move and press c or y"
 			} else {
 				m.rangeStart = -1
 				m.status = "Range cleared"
 			}
 			m.renderDiff()
+			return m, nil
+		case "y":
+			text, n, err := m.yankSelection()
+			if err != nil {
+				m.status = err.Error()
+				return m, nil
+			}
+			if err := copyClipboard(text); err != nil {
+				m.status = "Yank failed: " + err.Error()
+				return m, nil
+			}
+			m.status = fmt.Sprintf("Yanked %d line(s)", n)
 			return m, nil
 		}
 
@@ -1333,6 +1346,76 @@ func (m *Model) selectedAnchor() *domain.Anchor {
 	return &a
 }
 
+// yankSelection returns plain code for the cursor line or visual range.
+func (m *Model) yankSelection() (text string, lines int, err error) {
+	sel, err := m.selectionDiffLines()
+	if err != nil {
+		return "", 0, err
+	}
+	text = yankLines(sel)
+	if text == "" {
+		return "", 0, fmt.Errorf("nothing to yank")
+	}
+	n := strings.Count(text, "\n") + 1
+	return text, n, nil
+}
+
+func (m *Model) selectionDiffLines() ([]domain.DiffLine, error) {
+	if m.showAll {
+		if len(m.flat) == 0 {
+			return nil, fmt.Errorf("no diff loaded")
+		}
+		lo, hi := m.cursorLine, m.cursorLine
+		if m.rangeStart >= 0 {
+			lo, hi = m.rangeStart, m.cursorLine
+			if lo > hi {
+				lo, hi = hi, lo
+			}
+		}
+		if lo < 0 {
+			lo = 0
+		}
+		if hi >= len(m.flat) {
+			hi = len(m.flat) - 1
+		}
+		var out []domain.DiffLine
+		var path string
+		for i := lo; i <= hi; i++ {
+			row := m.flat[i]
+			if row.header || row.fd == nil || row.line < 0 || row.line >= len(row.fd.Lines) {
+				continue
+			}
+			if path == "" {
+				path = row.path
+			} else if row.path != path {
+				return nil, fmt.Errorf("yank range must stay in one file")
+			}
+			out = append(out, row.fd.Lines[row.line])
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("select a code line")
+		}
+		return out, nil
+	}
+	if m.fileDiff == nil || len(m.fileDiff.Lines) == 0 {
+		return nil, fmt.Errorf("no diff loaded")
+	}
+	lo, hi := m.cursorLine, m.cursorLine
+	if m.rangeStart >= 0 {
+		lo, hi = m.rangeStart, m.cursorLine
+		if lo > hi {
+			lo, hi = hi, lo
+		}
+	}
+	if lo < 0 {
+		lo = 0
+	}
+	if hi >= len(m.fileDiff.Lines) {
+		hi = len(m.fileDiff.Lines) - 1
+	}
+	return m.fileDiff.Lines[lo : hi+1], nil
+}
+
 func anchorHint(a *domain.Anchor) string {
 	if a == nil || a.Line <= 0 {
 		return ""
@@ -1853,7 +1936,7 @@ func (m Model) reviewHelpLine() string {
 	open := openTaskCount(m.tasks)
 	nConv := len(conversationComments(m.comments))
 	return fmt.Sprintf(
-		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · ,/.|# target · R reply · e edit · x del · v range · a %s · d %s · p overview(%d/%d) · r submit · O open · ? · q",
+		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · ,/.|# target · R reply · e edit · x del · v range · y yank · a %s · d %s · p overview(%d/%d) · r submit · O open · ? · q",
 		pane, view, layout, open, nConv,
 	)
 }

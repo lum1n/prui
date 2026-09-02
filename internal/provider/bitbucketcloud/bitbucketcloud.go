@@ -298,15 +298,11 @@ type bbPR struct {
 }
 
 func (p bbPR) toDomain(repo domain.RepoRef) domain.PullRequest {
-	author := p.Author.Nickname
-	if author == "" {
-		author = p.Author.DisplayName
-	}
 	return domain.PullRequest{
 		Ref:       domain.PRRef{Repo: repo, Number: p.ID},
 		Title:     p.Title,
 		Body:      p.Description,
-		Author:    author,
+		Author:    domain.FormatAuthor(p.Author.Nickname, p.Author.DisplayName),
 		State:     strings.ToLower(p.State),
 		URL:       p.Links.HTML.Href,
 		HeadSHA:   p.Source.Commit.Hash,
@@ -349,14 +345,10 @@ type bbComment struct {
 }
 
 func (cm bbComment) toDomain() domain.Comment {
-	author := cm.User.Nickname
-	if author == "" {
-		author = cm.User.DisplayName
-	}
 	c := domain.Comment{
 		ID:      strconv.Itoa(cm.ID),
 		Body:    cm.Content.Raw,
-		Author:  author,
+		Author:  domain.FormatAuthor(cm.User.Nickname, cm.User.DisplayName),
 		URL:     cm.Links.HTML.Href,
 		Created: cm.CreatedOn,
 	}

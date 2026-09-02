@@ -156,7 +156,7 @@ func TestBitbucketDCContract(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"values": []map[string]any{{
 				"id": 1, "title": "Hello", "state": "OPEN",
-				"author": map[string]any{"user": map[string]any{"slug": "alice"}},
+				"author": map[string]any{"user": map[string]any{"slug": "alice", "displayName": "Alice Andersen"}},
 				"fromRef": map[string]any{"latestCommit": "abc"},
 				"toRef":   map[string]any{"latestCommit": "def"},
 				"links":   map[string]any{"self": []map[string]any{{"href": "http://bb/1"}}},

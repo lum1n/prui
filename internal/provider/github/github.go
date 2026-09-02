@@ -169,7 +169,7 @@ func (c *Client) ListComments(ctx context.Context, ref domain.PRRef) ([]domain.C
 			out = append(out, domain.Comment{
 				ID:      fmt.Sprintf("%d", cm.GetID()),
 				Body:    cm.GetBody(),
-				Author:  cm.GetUser().GetLogin(),
+				Author:  domain.FormatAuthor(cm.GetUser().GetLogin(), cm.GetUser().GetName()),
 				Path:    cm.GetPath(),
 				Anchor:  anchor,
 				URL:     cm.GetHTMLURL(),
@@ -192,7 +192,7 @@ func (c *Client) ListComments(ctx context.Context, ref domain.PRRef) ([]domain.C
 			out = append(out, domain.Comment{
 				ID:      fmt.Sprintf("issue-%d", cm.GetID()),
 				Body:    cm.GetBody(),
-				Author:  cm.GetUser().GetLogin(),
+				Author:  domain.FormatAuthor(cm.GetUser().GetLogin(), cm.GetUser().GetName()),
 				URL:     cm.GetHTMLURL(),
 				Created: cm.GetCreatedAt().Time,
 			})
@@ -324,7 +324,7 @@ func mapPR(repo domain.RepoRef, p *github.PullRequest) domain.PullRequest {
 		Ref:       domain.PRRef{Repo: repo, Number: p.GetNumber()},
 		Title:     p.GetTitle(),
 		Body:      p.GetBody(),
-		Author:    p.GetUser().GetLogin(),
+		Author:    domain.FormatAuthor(p.GetUser().GetLogin(), p.GetUser().GetName()),
 		State:     p.GetState(),
 		URL:       p.GetHTMLURL(),
 		HeadSHA:   p.GetHead().GetSHA(),

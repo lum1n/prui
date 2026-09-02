@@ -361,10 +361,11 @@ type dcPR struct {
 }
 
 func (p dcPR) toDomain(repo domain.RepoRef, baseURL string) domain.PullRequest {
-	author := p.Author.User.Slug
-	if author == "" {
-		author = p.Author.User.Name
+	login := p.Author.User.Slug
+	if login == "" {
+		login = p.Author.User.Name
 	}
+	author := domain.FormatAuthor(login, p.Author.User.DisplayName)
 	urlStr := ""
 	if len(p.Links.Self) > 0 {
 		urlStr = p.Links.Self[0].Href
@@ -560,14 +561,14 @@ type dcMultilineMarker struct {
 }
 
 func (cm dcComment) toDomain() domain.Comment {
-	author := cm.Author.Slug
-	if author == "" {
-		author = cm.Author.Name
+	login := cm.Author.Slug
+	if login == "" {
+		login = cm.Author.Name
 	}
 	c := domain.Comment{
 		ID:      strconv.Itoa(cm.ID),
 		Body:    cm.Text,
-		Author:  author,
+		Author:  domain.FormatAuthor(login, cm.Author.DisplayName),
 		Created: time.UnixMilli(cm.CreatedDate),
 	}
 	if cm.Anchor != nil {

@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/vegard/prui/internal/domain"
@@ -38,47 +37,62 @@ func generalDrafts(drafts []domain.DraftComment) []domain.DraftComment {
 	return out
 }
 
-func formatConversation(comments []domain.Comment, drafts []domain.DraftComment, width int) string {
+func formatConversation(entries []convEntry, cursor int, width int) string {
 	if width < 40 {
 		width = 40
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Conversation"))
 	b.WriteString("\n")
-	b.WriteString(mutedStyle.Render("PR comments not tied to a diff line"))
+	b.WriteString(mutedStyle.Render("Threads · j/k select · R reply · c new"))
 	b.WriteString("\n\n")
 
-	if len(comments) == 0 && len(drafts) == 0 {
+	if len(entries) == 0 {
 		b.WriteString(mutedStyle.Render("No general comments yet. Press c to add a draft."))
 		b.WriteByte('\n')
 		return b.String()
 	}
 
-	for _, c := range comments {
-		b.WriteString(formatConversationEntry(c.Author, c.Body, c.Path, c.Created, false, width))
-		b.WriteByte('\n')
-	}
-	for _, d := range drafts {
-		b.WriteString(formatConversationEntry("you", d.Body, d.Path, time.Time{}, true, width))
+	for i, e := range entries {
+		b.WriteString(formatConversationEntry(e, i == cursor, width))
 		b.WriteByte('\n')
 	}
 	return b.String()
 }
 
-func formatConversationEntry(author, body, path string, created time.Time, draft bool, width int) string {
-	meta := author
-	if draft {
-		meta = draftStyle.Render("✎ draft · " + author)
+func formatConversationEntry(e convEntry, selected bool, width int) string {
+	indent := strings.Repeat("  ", e.Depth)
+	branch := ""
+	if e.Depth > 0 {
+		branch = "↳ "
+	}
+	meta := e.Author
+	if e.Draft {
+		meta = draftStyle.Render("✎ draft · " + e.Author)
 	} else {
-		meta = lipgloss.NewStyle().Foreground(lipgloss.Color("#61afef")).Bold(true).Render(author)
+		meta = lipgloss.NewStyle().Foreground(lipgloss.Color("#61afef")).Bold(true).Render(e.Author)
 	}
-	if path != "" {
-		meta += mutedStyle.Render(" · file " + path)
+	if e.Path != "" {
+		meta += mutedStyle.Render(" · file " + e.Path)
 	}
-	if !created.IsZero() {
-		meta += mutedStyle.Render(" · " + created.Local().Format("2006-01-02 15:04"))
+	prefix := "  "
+	if selected {
+		prefix = "> "
 	}
-	wrapped := lipgloss.NewStyle().Width(width - 2).Render(strings.TrimSpace(body))
+	header := prefix + indent + branch + meta
+	bodyWidth := width - 2 - len(indent) - len(prefix)
+	if bodyWidth < 20 {
+		bodyWidth = 20
+	}
+	wrapped := lipgloss.NewStyle().Width(bodyWidth).Render(strings.TrimSpace(e.Body))
+	// Indent wrapped body under the header.
+	bodyLines := strings.Split(wrapped, "\n")
+	for i := range bodyLines {
+		bodyLines[i] = "  " + indent + bodyLines[i]
+	}
 	sep := mutedStyle.Render(strings.Repeat("─", min(width, 48)))
-	return fmt.Sprintf("%s\n%s\n%s\n", meta, wrapped, sep)
+	if selected {
+		sep = lipgloss.NewStyle().Foreground(lipgloss.Color("#e6c07b")).Render(strings.Repeat("─", min(width, 48)))
+	}
+	return fmt.Sprintf("%s\n%s\n%s\n", header, strings.Join(bodyLines, "\n"), sep)
 }

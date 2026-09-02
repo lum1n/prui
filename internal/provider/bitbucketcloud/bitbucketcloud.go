@@ -222,7 +222,13 @@ func (c *Client) SubmitReview(ctx context.Context, ref domain.PRRef, draft domai
 		body := map[string]any{
 			"content": map[string]string{"raw": d.Body},
 		}
-		if d.Anchor != nil {
+		if d.ParentID != "" {
+			id, err := strconv.Atoi(d.ParentID)
+			if err != nil {
+				return fmt.Errorf("parent id: %w", err)
+			}
+			body["parent"] = map[string]any{"id": id}
+		} else if d.Anchor != nil {
 			inline := map[string]any{"path": d.Anchor.Path}
 			if d.Anchor.Side == domain.SideLeft {
 				inline["from"] = d.Anchor.Line
@@ -331,6 +337,9 @@ type bbComment struct {
 		DisplayName string `json:"display_name"`
 		Nickname    string `json:"nickname"`
 	} `json:"user"`
+	Parent *struct {
+		ID int `json:"id"`
+	} `json:"parent"`
 	Inline *struct {
 		Path string `json:"path"`
 		To   *int   `json:"to"`
@@ -351,6 +360,9 @@ func (cm bbComment) toDomain() domain.Comment {
 		Author:  domain.FormatAuthor(cm.User.Nickname, cm.User.DisplayName),
 		URL:     cm.Links.HTML.Href,
 		Created: cm.CreatedOn,
+	}
+	if cm.Parent != nil && cm.Parent.ID != 0 {
+		c.ParentID = strconv.Itoa(cm.Parent.ID)
 	}
 	if cm.Inline != nil {
 		c.Path = cm.Inline.Path

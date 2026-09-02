@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -166,14 +167,19 @@ func (c *Client) ListComments(ctx context.Context, ref domain.PRRef) ([]domain.C
 			if anchor.Side == "" {
 				anchor.Side = domain.SideRight
 			}
+			parent := ""
+			if cm.GetInReplyTo() != 0 {
+				parent = fmt.Sprintf("%d", cm.GetInReplyTo())
+			}
 			out = append(out, domain.Comment{
-				ID:      fmt.Sprintf("%d", cm.GetID()),
-				Body:    cm.GetBody(),
-				Author:  domain.FormatAuthor(cm.GetUser().GetLogin(), cm.GetUser().GetName()),
-				Path:    cm.GetPath(),
-				Anchor:  anchor,
-				URL:     cm.GetHTMLURL(),
-				Created: cm.GetCreatedAt().Time,
+				ID:       fmt.Sprintf("%d", cm.GetID()),
+				Body:     cm.GetBody(),
+				Author:   domain.FormatAuthor(cm.GetUser().GetLogin(), cm.GetUser().GetName()),
+				Path:     cm.GetPath(),
+				Anchor:   anchor,
+				ParentID: parent,
+				URL:      cm.GetHTMLURL(),
+				Created:  cm.GetCreatedAt().Time,
 			})
 		}
 		if resp.NextPage == 0 {
@@ -232,7 +238,12 @@ func (c *Client) SubmitReview(ctx context.Context, ref domain.PRRef, draft domai
 	commitID := pr.GetHead().GetSHA()
 
 	var comments []*github.DraftReviewComment
+	var replies []domain.DraftComment
 	for _, d := range draft.Comments {
+		if d.ParentID != "" {
+			replies = append(replies, d)
+			continue
+		}
 		if d.Anchor == nil {
 			continue
 		}
@@ -256,7 +267,7 @@ func (c *Client) SubmitReview(ctx context.Context, ref domain.PRRef, draft domai
 
 	body := draft.Summary
 	for _, d := range draft.Comments {
-		if d.Anchor == nil && d.Body != "" {
+		if d.Anchor == nil && d.ParentID == "" && d.Body != "" {
 			if body != "" {
 				body += "\n\n"
 			}
@@ -269,6 +280,33 @@ func (c *Client) SubmitReview(ctx context.Context, ref domain.PRRef, draft domai
 		Body:     github.Ptr(body),
 		Event:    github.Ptr(event),
 		Comments: comments,
+	}
+
+	postReplies := func() error {
+		for _, d := range replies {
+			if strings.HasPrefix(d.ParentID, "issue-") {
+				// Issue comments are not threaded via the review API.
+				_, _, err := c.gh.Issues.CreateComment(ctx, ref.Repo.Owner, ref.Repo.Name, ref.Number, &github.IssueComment{
+					Body: github.Ptr(d.Body),
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			parent, err := strconv.ParseInt(d.ParentID, 10, 64)
+			if err != nil {
+				return fmt.Errorf("parent id: %w", err)
+			}
+			_, _, err = c.gh.PullRequests.CreateComment(ctx, ref.Repo.Owner, ref.Repo.Name, ref.Number, &github.PullRequestComment{
+				Body:      github.Ptr(d.Body),
+				InReplyTo: github.Ptr(parent),
+			})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	if draft.RemoteID != 0 {
@@ -284,6 +322,9 @@ func (c *Client) SubmitReview(ctx context.Context, ref domain.PRRef, draft domai
 				return err
 			}
 		}
+		if err := postReplies(); err != nil {
+			return err
+		}
 		_, _, err := c.gh.PullRequests.SubmitReview(ctx, ref.Repo.Owner, ref.Repo.Name, ref.Number, draft.RemoteID, &github.PullRequestReviewRequest{
 			Body:  github.Ptr(body),
 			Event: github.Ptr(event),
@@ -292,7 +333,10 @@ func (c *Client) SubmitReview(ctx context.Context, ref domain.PRRef, draft domai
 	}
 
 	_, _, err = c.gh.PullRequests.CreateReview(ctx, ref.Repo.Owner, ref.Repo.Name, ref.Number, req)
-	return err
+	if err != nil {
+		return err
+	}
+	return postReplies()
 }
 
 func (c *Client) Approve(ctx context.Context, ref domain.PRRef) error {

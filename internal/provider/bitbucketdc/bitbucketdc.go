@@ -210,7 +210,6 @@ func (c *Client) ListComments(ctx context.Context, ref domain.PRRef) ([]domain.C
 		Values []dcActivity `json:"values"`
 	}
 	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, u, c.headers(), nil, &page); err != nil {
-		// fallback comments endpoint
 		return c.listCommentsEndpoint(ctx, ref)
 	}
 	out := make([]domain.Comment, 0)
@@ -218,7 +217,7 @@ func (c *Client) ListComments(ctx context.Context, ref domain.PRRef) ([]domain.C
 		if a.Action != "COMMENTED" || a.Comment == nil {
 			continue
 		}
-		out = append(out, a.Comment.toDomain())
+		out = append(out, a.Comment.flatten("", a.CommentAnchor)...)
 	}
 	return out, nil
 }
@@ -231,9 +230,9 @@ func (c *Client) listCommentsEndpoint(ctx context.Context, ref domain.PRRef) ([]
 	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, u, c.headers(), nil, &page); err != nil {
 		return nil, err
 	}
-	out := make([]domain.Comment, 0, len(page.Values))
+	out := make([]domain.Comment, 0)
 	for _, cm := range page.Values {
-		out = append(out, cm.toDomain())
+		out = append(out, cm.flatten("", nil)...)
 	}
 	return out, nil
 }
@@ -245,7 +244,13 @@ func (c *Client) StartReview(ctx context.Context, ref domain.PRRef) (*domain.Dra
 func (c *Client) SubmitReview(ctx context.Context, ref domain.PRRef, draft domain.DraftReview) error {
 	for _, d := range draft.Comments {
 		body := map[string]any{"text": d.Body}
-		if d.Anchor != nil {
+		if d.ParentID != "" {
+			id, err := strconv.Atoi(d.ParentID)
+			if err != nil {
+				return fmt.Errorf("parent id: %w", err)
+			}
+			body["parent"] = map[string]any{"id": id}
+		} else if d.Anchor != nil {
 			body["anchor"] = buildDCAnchor(d.Anchor)
 		}
 		if _, err := httputil.DoJSON(ctx, c.http, http.MethodPost, c.prPath(ref)+"/comments", c.headers(), body, nil); err != nil {
@@ -531,8 +536,9 @@ func dcDiffToUnified(wantPath string, raw dcDiffResponse) string {
 }
 
 type dcActivity struct {
-	Action  string     `json:"action"`
-	Comment *dcComment `json:"comment"`
+	Action        string           `json:"action"`
+	Comment       *dcComment       `json:"comment"`
+	CommentAnchor *dcCommentAnchor `json:"commentAnchor"`
 }
 
 type dcComment struct {
@@ -543,8 +549,9 @@ type dcComment struct {
 		DisplayName string `json:"displayName"`
 		Slug        string `json:"slug"`
 	} `json:"author"`
-	Anchor *dcCommentAnchor `json:"anchor"`
-	CreatedDate int64 `json:"createdDate"`
+	Anchor      *dcCommentAnchor `json:"anchor"`
+	Comments    []dcComment      `json:"comments"`
+	CreatedDate int64            `json:"createdDate"`
 }
 
 type dcCommentAnchor struct {
@@ -560,33 +567,51 @@ type dcMultilineMarker struct {
 	StartLineType string `json:"startLineType"`
 }
 
+func (cm dcComment) flatten(parentID string, inherit *dcCommentAnchor) []domain.Comment {
+	anchor := cm.Anchor
+	if anchor == nil {
+		anchor = inherit
+	}
+	c := cm.toDomainWith(parentID, anchor)
+	out := []domain.Comment{c}
+	for _, reply := range cm.Comments {
+		out = append(out, reply.flatten(c.ID, anchor)...)
+	}
+	return out
+}
+
 func (cm dcComment) toDomain() domain.Comment {
+	return cm.toDomainWith("", cm.Anchor)
+}
+
+func (cm dcComment) toDomainWith(parentID string, anchor *dcCommentAnchor) domain.Comment {
 	login := cm.Author.Slug
 	if login == "" {
 		login = cm.Author.Name
 	}
 	c := domain.Comment{
-		ID:      strconv.Itoa(cm.ID),
-		Body:    cm.Text,
-		Author:  domain.FormatAuthor(login, cm.Author.DisplayName),
-		Created: time.UnixMilli(cm.CreatedDate),
+		ID:       strconv.Itoa(cm.ID),
+		Body:     cm.Text,
+		Author:   domain.FormatAuthor(login, cm.Author.DisplayName),
+		ParentID: parentID,
+		Created:  time.UnixMilli(cm.CreatedDate),
 	}
-	if cm.Anchor != nil {
-		c.Path = cm.Anchor.Path
+	if anchor != nil {
+		c.Path = anchor.Path
 		side := domain.SideRight
-		lt := domain.LineType(cm.Anchor.LineType)
-		if cm.Anchor.FileType == "FROM" || lt == domain.LineRemoved {
+		lt := domain.LineType(anchor.LineType)
+		if anchor.FileType == "FROM" || lt == domain.LineRemoved {
 			side = domain.SideLeft
 		}
 		a := &domain.Anchor{
-			Path:     cm.Anchor.Path,
+			Path:     anchor.Path,
 			Side:     side,
-			Line:     cm.Anchor.Line,
+			Line:     anchor.Line,
 			LineType: lt,
 		}
-		if m := cm.Anchor.MultilineMarker; m != nil && m.StartLine > 0 && m.StartLine < cm.Anchor.Line {
+		if m := anchor.MultilineMarker; m != nil && m.StartLine > 0 && m.StartLine < anchor.Line {
 			a.Line = m.StartLine
-			a.EndLine = cm.Anchor.Line
+			a.EndLine = anchor.Line
 			if m.StartLineType != "" {
 				a.LineType = domain.LineType(m.StartLineType)
 			}

@@ -99,18 +99,19 @@ prui pr list owner/repo
 | `Tab` | Files ↔ diff |
 | `Enter` | Open PR / load file |
 | `c` | New comment on line |
+| `R` | Reply to comment on line / selected conversation comment |
 | `e` | Edit draft on line |
 | `x` | Delete draft on line |
 | `v` | Range select |
 | `r` | Submit review |
 | `[`/`]` | Prev/next hunk |
-| `C` | PR conversation (general comments) |
+| `C` | PR conversation (threaded general comments) |
 | `o` | Show PR URL |
 | `O` | Open PR in browser |
 | `?` | Help |
 | `q` | Back / quit |
 
-Comment editor: `enter`/`ctrl+s` save, `esc` cancel. `e`/`x` edit or delete the draft on the cursor line.
+Comment editor: `enter`/`ctrl+s` save, `esc` cancel. `e`/`x` edit or delete the draft on the cursor line. In conversation, `j`/`k` select a comment and `R` replies in that thread.
 
 ## Architecture
 

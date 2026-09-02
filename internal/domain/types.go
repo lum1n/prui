@@ -140,10 +140,11 @@ type Comment struct {
 
 // DraftComment is a locally staged inline or general comment.
 type DraftComment struct {
-	ID     string
-	Body   string
-	Path   string
-	Anchor *Anchor // nil = general / review-level
+	ID       string
+	Body     string
+	Path     string
+	Anchor   *Anchor // nil = general / review-level
+	ParentID string  // non-empty = reply in an existing thread
 }
 
 // DraftReview is the in-progress review batch.

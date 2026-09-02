@@ -112,6 +112,8 @@ type Model struct {
 	commenting     bool
 	editingID      string // non-empty while editing an existing draft
 	commentGeneral bool   // true when drafting a PR-level (non-line) comment
+	replyParentID  string // non-empty when drafting a reply in a thread
+	convCursor     int    // selected row in conversation thread list
 	activePath     string // last requested / shown file path
 	leftWidth      int
 	rightWidth     int
@@ -199,6 +201,7 @@ const defaultHelp = `Keys
   tab       switch pane
   enter     open PR / load file
   c         new comment on line
+  R         reply to comment on line / selected conversation comment
   e         edit draft on line
   x         delete draft on line
   v         toggle range select
@@ -207,13 +210,14 @@ const defaultHelp = `Keys
   d         toggle unified/split layout
   a         toggle this-file / all-files view
   [ ]       prev/next hunk
-  C         PR conversation (general comments)
+  C         PR conversation (threaded general comments)
   o         show PR URL in status
   O         open PR in browser
   ?         help
   q/esc     back / quit
 
 Inline comment: enter save, esc cancel
+Conversation: j/k select · R reply · c new
 
 Views
   this-file   only the selected path (default)
@@ -533,6 +537,7 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenBody
 			return m, nil
 		case "C":
+			m.convCursor = 0
 			m.showConversation()
 			m.screen = screenConversation
 			return m, nil
@@ -600,6 +605,13 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, m.beginComment("")
+		case "R":
+			parent := m.replyTargetOnCursor()
+			if parent == "" {
+				m.status = "No comment to reply to on this line"
+				return m, nil
+			}
+			return m, m.beginReply(parent, false)
 		case "e":
 			d := m.draftOnCursor()
 			if d == nil {
@@ -726,7 +738,7 @@ func (m *Model) selectFile(path string) tea.Cmd {
 	return m.loadDiff(path)
 }
 
-// draftOnCursor returns the last draft anchored on the cursor line, if any.
+// draftOnCursor returns the last draft on the cursor line's thread, if any.
 func (m *Model) draftOnCursor() *domain.DraftComment {
 	if m.session == nil {
 		return nil
@@ -736,28 +748,46 @@ func (m *Model) draftOnCursor() *domain.DraftComment {
 		return nil
 	}
 	ln := row.fd.Lines[row.line]
+	nodes := lineThread(m.comments, m.session.Draft.Comments, row.path, ln)
 	var found *domain.DraftComment
-	for i := range m.session.Draft.Comments {
-		d := &m.session.Draft.Comments[i]
-		if d.Path != row.path || d.Anchor == nil {
-			continue
-		}
-		if d.Anchor.Line == ln.Anchor.Line && (d.Anchor.Side == "" || d.Anchor.Side == ln.Anchor.Side) {
-			found = d
+	for _, n := range nodes {
+		if n.Draft != nil {
+			found = n.Draft
 		}
 	}
 	return found
 }
 
+// replyTargetOnCursor picks the last remote comment in the cursor line thread.
+func (m *Model) replyTargetOnCursor() string {
+	row, ok := m.cursorRow()
+	if !ok || row.header || row.fd == nil || row.line < 0 || row.line >= len(row.fd.Lines) {
+		return ""
+	}
+	var drafts []domain.DraftComment
+	if m.session != nil {
+		drafts = m.session.Draft.Comments
+	}
+	nodes := lineThread(m.comments, drafts, row.path, row.fd.Lines[row.line])
+	parent := ""
+	for _, n := range nodes {
+		if n.Comment != nil {
+			parent = n.Comment.ID
+		}
+	}
+	return parent
+}
+
 func (m *Model) beginComment(editID string) tea.Cmd {
-	m.pane = paneDiff
 	m.editingID = editID
 	m.commentGeneral = false
+	m.replyParentID = ""
 	if editID != "" && m.session != nil {
 		for _, d := range m.session.Draft.Comments {
 			if d.ID == editID {
 				m.comment.SetValue(d.Body)
 				m.commentGeneral = d.Anchor == nil
+				m.replyParentID = d.ParentID
 				break
 			}
 		}
@@ -766,15 +796,42 @@ func (m *Model) beginComment(editID string) tea.Cmd {
 		m.comment.SetValue("")
 		m.status = "Commenting — enter save, esc cancel"
 	}
+	if m.screen == screenConversation {
+		m.commentGeneral = true
+	} else {
+		m.pane = paneDiff
+	}
 	m.comment.Focus()
 	m.commenting = true
 	m.layout()
+	if m.screen == screenConversation {
+		m.showConversation()
+	}
+	return textarea.Blink
+}
+
+func (m *Model) beginReply(parentID string, general bool) tea.Cmd {
+	m.editingID = ""
+	m.replyParentID = parentID
+	m.commentGeneral = general
+	m.comment.SetValue("")
+	m.comment.Focus()
+	m.commenting = true
+	m.status = "Reply — enter save, esc cancel"
+	if general {
+		m.layout()
+		m.showConversation()
+	} else {
+		m.pane = paneDiff
+		m.layout()
+	}
 	return textarea.Blink
 }
 
 func (m *Model) beginGeneralComment() tea.Cmd {
 	m.editingID = ""
 	m.commentGeneral = true
+	m.replyParentID = ""
 	m.comment.SetValue("")
 	m.comment.Focus()
 	m.commenting = true
@@ -784,10 +841,15 @@ func (m *Model) beginGeneralComment() tea.Cmd {
 	return textarea.Blink
 }
 
+func (m *Model) conversationEntries() []convEntry {
+	return buildConversationEntries(m.comments, m.sessionDrafts())
+}
+
 func (m Model) updateConversation(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.commenting && m.commentGeneral {
+	if m.commenting {
 		return m.updateInlineComment(msg)
 	}
+	entries := m.conversationEntries()
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -795,27 +857,75 @@ func (m Model) updateConversation(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenReview
 			m.commenting = false
 			m.commentGeneral = false
+			m.replyParentID = ""
 			m.layout()
+			return m, nil
+		case "j", "down":
+			if len(entries) == 0 {
+				return m, nil
+			}
+			m.convCursor = (m.convCursor + 1) % len(entries)
+			m.showConversation()
+			return m, nil
+		case "k", "up":
+			if len(entries) == 0 {
+				return m, nil
+			}
+			m.convCursor = (m.convCursor - 1 + len(entries)) % len(entries)
+			m.showConversation()
 			return m, nil
 		case "c":
 			return m, m.beginGeneralComment()
+		case "R":
+			if len(entries) == 0 {
+				m.status = "No comment to reply to"
+				return m, nil
+			}
+			if m.convCursor < 0 || m.convCursor >= len(entries) {
+				m.convCursor = 0
+			}
+			e := entries[m.convCursor]
+			parent := e.ID
+			if e.Draft {
+				if e.Parent == "" {
+					m.status = "Select a remote comment to reply to"
+					return m, nil
+				}
+				parent = e.Parent
+			}
+			return m, m.beginReply(parent, true)
 		case "e":
-			drafts := generalDrafts(m.sessionDrafts())
-			if len(drafts) == 0 {
-				m.status = "No general drafts"
+			if len(entries) == 0 {
+				m.status = "No drafts"
 				return m, nil
 			}
-			d := drafts[len(drafts)-1]
-			m.screen = screenConversation
-			return m, m.beginComment(d.ID)
+			if m.convCursor < 0 || m.convCursor >= len(entries) {
+				m.convCursor = 0
+			}
+			e := entries[m.convCursor]
+			if !e.Draft {
+				m.status = "Select a draft to edit"
+				return m, nil
+			}
+			return m, m.beginComment(e.ID)
 		case "x":
-			drafts := generalDrafts(m.sessionDrafts())
-			if len(drafts) == 0 {
-				m.status = "No general drafts"
+			if len(entries) == 0 {
+				m.status = "No drafts"
 				return m, nil
 			}
-			_ = m.session.RemoveComment(drafts[len(drafts)-1].ID)
+			if m.convCursor < 0 || m.convCursor >= len(entries) {
+				m.convCursor = 0
+			}
+			e := entries[m.convCursor]
+			if !e.Draft {
+				m.status = "Select a draft to delete"
+				return m, nil
+			}
+			_ = m.session.RemoveComment(e.ID)
 			m.status = "Draft deleted"
+			if m.convCursor > 0 {
+				m.convCursor--
+			}
 			m.showConversation()
 			return m, nil
 		}
@@ -841,6 +951,7 @@ func (m Model) updateInlineComment(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.commenting = false
 			m.editingID = ""
 			m.commentGeneral = false
+			m.replyParentID = ""
 			m.comment.Blur()
 			m.layout()
 			m.status = "Comment cancelled"
@@ -860,9 +971,14 @@ func (m Model) updateInlineComment(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			wasGeneral := m.commentGeneral
+			replyParent := m.replyParentID
 			path := ""
-			if !wasGeneral && m.fileDiff != nil {
-				path = m.fileDiff.Path
+			if !wasGeneral {
+				if row, ok := m.cursorRow(); ok && !row.header {
+					path = row.path
+				} else if m.fileDiff != nil {
+					path = m.fileDiff.Path
+				}
 			}
 			if m.editingID != "" {
 				if err := m.session.UpdateComment(m.editingID, body); err != nil {
@@ -870,6 +986,18 @@ func (m Model) updateInlineComment(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.status = "Draft updated"
+			} else if replyParent != "" {
+				dc := domain.DraftComment{Body: body, ParentID: replyParent}
+				if !wasGeneral {
+					dc.Path = path
+					// Keep a soft anchor so the reply stays visible on this line
+					// even before parent lookup on reload.
+					if a := m.selectedAnchor(); a != nil {
+						dc.Anchor = a
+					}
+				}
+				_ = m.session.AddComment(dc)
+				m.status = "Reply draft added"
 			} else if wasGeneral {
 				_ = m.session.AddComment(domain.DraftComment{Body: body})
 				m.status = "General draft added"
@@ -887,6 +1015,7 @@ func (m Model) updateInlineComment(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.commenting = false
 			m.editingID = ""
 			m.commentGeneral = false
+			m.replyParentID = ""
 			m.comment.Blur()
 			m.layout()
 			if wasGeneral {
@@ -1205,11 +1334,15 @@ func (m *Model) showBody() {
 }
 
 func (m *Model) showConversation() {
-	var drafts []domain.DraftComment
-	if m.session != nil {
-		drafts = generalDrafts(m.session.Draft.Comments)
+	entries := m.conversationEntries()
+	if len(entries) == 0 {
+		m.convCursor = 0
+	} else if m.convCursor >= len(entries) {
+		m.convCursor = len(entries) - 1
+	} else if m.convCursor < 0 {
+		m.convCursor = 0
 	}
-	content := formatConversation(conversationComments(m.comments), drafts, m.width-2)
+	content := formatConversation(entries, m.convCursor, m.width-2)
 	m.bodyVP.SetContent(content)
 	m.bodyVP.GotoTop()
 }
@@ -1353,18 +1486,11 @@ func (m *Model) writeDiffLine(b *strings.Builder, fd *domain.FileDiff, ln domain
 	opt := diff.Options{Theme: th, Width: width, Selected: sel, Split: m.splitDiff}
 	b.WriteString(diff.Paint(m.hl, fd.Path, ln, opt))
 	b.WriteByte('\n')
-	for _, c := range m.comments {
-		if c.Anchor != nil && c.Path == fd.Path && c.Anchor.Line == ln.Anchor.Line && c.Anchor.Side == ln.Anchor.Side {
-			b.WriteString(diff.PaintAnnotation(c.Author, c.Body, false, th, width) + "\n")
-		}
-	}
+	var drafts []domain.DraftComment
 	if m.session != nil {
-		for _, d := range m.session.Draft.Comments {
-			if d.Anchor != nil && d.Path == fd.Path && d.Anchor.Line == ln.Anchor.Line {
-				b.WriteString(diff.PaintAnnotation("you", d.Body, true, th, width) + "\n")
-			}
-		}
+		drafts = m.session.Draft.Comments
 	}
+	b.WriteString(paintThread(lineThread(m.comments, drafts, fd.Path, ln), th, width))
 }
 
 func (m Model) View() string {
@@ -1385,6 +1511,9 @@ func (m Model) View() string {
 		rightInner := m.diffVP.View()
 		if m.commenting {
 			label := "✎ comment" + anchorHint(m.selectedAnchor()) + "  (enter save · esc cancel)"
+			if m.replyParentID != "" {
+				label = "✎ reply" + anchorHint(m.selectedAnchor()) + "  (enter save · esc cancel)"
+			}
 			if m.editingID != "" {
 				label = "✎ edit draft" + anchorHint(m.selectedAnchor()) + "  (enter save · esc cancel)"
 			}
@@ -1436,10 +1565,13 @@ func (m Model) View() string {
 		body = m.bodyVP.View()
 	case screenConversation:
 		inner := m.bodyVP.View()
-		if m.commenting && m.commentGeneral {
+		if m.commenting {
 			label := "✎ general comment  (enter save · esc cancel)"
+			if m.replyParentID != "" {
+				label = "✎ reply  (enter save · esc cancel)"
+			}
 			if m.editingID != "" {
-				label = "✎ edit general draft  (enter save · esc cancel)"
+				label = "✎ edit draft  (enter save · esc cancel)"
 			}
 			inner = lipgloss.JoinVertical(lipgloss.Left,
 				inner,
@@ -1482,16 +1614,15 @@ func (m Model) reviewHelpLine() string {
 		if m.commenting {
 			return "enter save · esc cancel"
 		}
-		n := len(conversationComments(m.comments))
-		d := 0
-		if m.session != nil {
-			d = len(generalDrafts(m.session.Draft.Comments))
-		}
-		return fmt.Sprintf("conversation · %d comments · %d drafts · c add · e edit draft · x del draft · C/esc back", n, d)
+		n := len(m.conversationEntries())
+		return fmt.Sprintf("conversation · %d · j/k select · R reply · c add · e edit draft · x del · C/esc back", n)
 	}
 	if m.commenting {
 		if m.editingID != "" {
 			return "enter save edit · esc cancel"
+		}
+		if m.replyParentID != "" {
+			return "reply · enter save · esc cancel"
 		}
 		return "enter save · esc cancel"
 	}
@@ -1509,7 +1640,7 @@ func (m Model) reviewHelpLine() string {
 	}
 	nConv := len(conversationComments(m.comments))
 	return fmt.Sprintf(
-		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · e edit · x del · v range · a %s · d %s · C talk(%d) · r submit · O open · ? · q",
+		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · R reply · e edit · x del · v range · a %s · d %s · C talk(%d) · r submit · O open · ? · q",
 		pane, view, layout, nConv,
 	)
 }

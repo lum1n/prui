@@ -9,7 +9,7 @@ hosts:
     base_url: https://github.com
     api_url: https://api.github.com/
 
-  - name: work-ghe
+  - name: ghe
     kind: github
     base_url: https://ghe.example.com
     api_url: https://ghe.example.com/api/v3
@@ -27,27 +27,25 @@ hosts:
     token_env: BITBUCKET_TOKEN
     username: yourname
 
-  - name: work-bb
+  - name: bitbucket-dc
     kind: bitbucket_dc
     base_url: https://bitbucket.example.com
     api_url: https://bitbucket.example.com/rest/api/1.0
     cookie_env: BB_COOKIE
     match_hosts:
-      - git-ssh.example.com
+      - git.bitbucket.example.com
 
 defaults:
-  host: work-bb
+  host: github
 
 ui:
   diff: unified   # unified | split
   files: selected # selected | all
   theme: dark
 
-# AI summarize (key S). Selection is config-only.
-# Copilot GHE while on Bitbucket: set api_url, then:
-#   prui auth login --hostname ghe.example.com
+# AI summarize (key S). Selection is config-only (`ai.default`).
 ai:
-  default: copilot-ghe
+  default: claude
   max_context_bytes: 120000
   timeout_sec: 120
   providers:
@@ -55,15 +53,13 @@ ai:
       kind: claude
       model: claude-sonnet-4-5
       token_env: ANTHROPIC_API_KEY
-    copilot-ghe:
-      kind: copilot
-      model: gpt-4o            # gpt-4.1 is not available on all Copilot SKUs
-      api_url: https://ghe.example.com/api/v3
-      # github_host: work-ghe  # alternative: reuse hosts entry
-      # oauth_client_id: Iv1.xxxxx  # native device flow without gh
     copilot:
       kind: copilot
       model: gpt-4o
+      # For GitHub Enterprise Copilot:
+      # api_url: https://ghe.example.com/api/v3
+      # github_host: ghe
+      # oauth_client_id: Iv1.xxxxx  # native device flow without gh
     codex:
       kind: codex
       model: ""

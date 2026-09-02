@@ -524,6 +524,7 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showAll = !m.showAll
 			m.rangeStart = -1
 			m.commenting = false
+			m.editingID = ""
 			if m.showAll {
 				m.status = "All-files view"
 				m.loading = true

@@ -187,7 +187,7 @@ prui version
 | `Tab` | Files ↔ diff |
 | `Enter` | Open PR / load file |
 | `c` | New comment on line |
-| `p` | PR overview (status, tasks, description, summary, conversation) |
+| `p` | PR overview (status, reviews, tasks, description, summary, conversation) |
 | `C` | Overview focused on conversation |
 | `S` | AI summarize (`ai.default`) |
 | `R` | Reply to selected comment (diff target / overview conversation) |

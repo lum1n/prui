@@ -21,6 +21,7 @@ type Config struct {
 // AIConfig selects and configures LLM providers for summarize.
 type AIConfig struct {
 	Default         string                `mapstructure:"default"`
+	SummaryDetail   string                `mapstructure:"summary_detail"` // short | medium | full
 	MaxContextBytes int                   `mapstructure:"max_context_bytes"`
 	TimeoutSec      int                   `mapstructure:"timeout_sec"`
 	Providers       map[string]AIProvider `mapstructure:"providers"`
@@ -80,6 +81,7 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("ui.theme", "dark")
 	v.SetDefault("ai.max_context_bytes", 120000)
 	v.SetDefault("ai.timeout_sec", 120)
+	v.SetDefault("ai.summary_detail", "medium")
 
 	if cfgFile != "" {
 		v.SetConfigFile(cfgFile)

@@ -115,9 +115,18 @@ export BB_COOKIE='JSESSIONID=...; BITBUCKETSESSIONID=...'
 
 Press **`S`** in review or overview. The provider is chosen from config (`ai.default`) — no in-app picker.
 
+Detail levels (config `ai.summary_detail`, or cycle with **`s`**):
+
+| Level | Behavior |
+|-------|----------|
+| `short` | One paragraph only |
+| `medium` | At most three paragraphs (default) |
+| `full` | No length restriction |
+
 ```yaml
 ai:
   default: claude
+  summary_detail: medium   # short | medium | full
   max_context_bytes: 120000
   timeout_sec: 120
   providers:
@@ -172,7 +181,8 @@ prui version
 | `c` | New comment on line |
 | `p` | PR overview (status, reviews, tasks, description, summary, conversation) |
 | `C` | Overview focused on conversation |
-| `S` | AI summarize (`ai.default`) |
+| `S` | AI summarize (`ai.default`, current detail level) |
+| `s` | Cycle summary detail: short → medium → full |
 | `R` | Reply to selected comment (diff target / overview conversation) |
 | `,` / `.` | Prev/next reply target on the cursor line |
 | `1`–`9` | Jump to reply target `#N` on the cursor line |

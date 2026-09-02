@@ -7,12 +7,6 @@ import (
 	"github.com/lum1n/prui/internal/domain"
 )
 
-// SystemPrompt is the fixed reviewer brief for summarize.
-const SystemPrompt = `You are an experienced code reviewer summarizing a pull request.
-Be concise and factual. Use markdown.
-Cover: intent, main changes, risks/edge cases, and what to test.
-Do not invent files, APIs, or behavior that are not in the provided context.`
-
 // ContextInput is PR state used to build the user prompt.
 type ContextInput struct {
 	PR              *domain.PullRequest

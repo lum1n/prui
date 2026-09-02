@@ -122,6 +122,7 @@ type Model struct {
 	summaryErr   string
 	summarizing  bool
 	summaryGen   int // bumps to ignore stale summarize results
+	summaryDetail ai.DetailLevel
 }
 
 type loadedPRsMsg struct {
@@ -159,11 +160,12 @@ type loadedReviewStatusMsg struct {
 	err    error
 }
 type loadedSummaryMsg struct {
-	gen   int
-	text  string
-	err   error
-	kind  string
-	model string
+	gen    int
+	text   string
+	err    error
+	kind   string
+	model  string
+	detail ai.DetailLevel
 }
 
 // NewModel creates the root TUI model.
@@ -204,6 +206,11 @@ func NewModel(opts Options) Model {
 		showAll:    opts.Config != nil && opts.Config.UI.Files == "all",
 		diffCache:  map[string]*domain.FileDiff{},
 	}
+	if opts.Config != nil {
+		m.summaryDetail = ai.ParseDetailLevel(opts.Config.AI.SummaryDetail)
+	} else {
+		m.summaryDetail = ai.DetailMedium
+	}
 	if opts.PRNumber > 0 {
 		m.screen = screenReview
 	}
@@ -228,6 +235,7 @@ const defaultHelp = `Keys
   p         PR overview (status · reviews · tasks · description · summary · conversation)
   C         PR overview → conversation section
   S         AI summarize (config ai.default)
+  s         cycle summary detail (short → medium → full)
   d         toggle unified/split layout
   a         toggle this-file / all-files view
   [ ]       prev/next hunk
@@ -238,7 +246,7 @@ const defaultHelp = `Keys
 
 Inline comment: enter save, esc cancel
 Diff thread: ,/. or 1-9 pick target · R reply
-Overview: reviews · tab section · j/k · space toggle task · S summarize · R reply · c new
+Overview: reviews · tab section · j/k · space toggle task · S summarize · s detail · R reply · c new
 
 Views
   this-file   only the selected path (default)
@@ -551,7 +559,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.model != "" {
 				label += "/" + msg.model
 			}
-			m.status = "Summarized with " + label
+			detail := msg.detail.String()
+			if detail == "" {
+				detail = m.summaryDetail.String()
+			}
+			m.status = "Summarized (" + detail + ") with " + label
 		}
 		m.overviewSec = sectionSummary
 		m.screen = screenOverview
@@ -720,33 +732,10 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			m.renderOverview()
 			return m, tea.Batch(m.loadTasks(), m.loadReviewStatus())
+		case "s":
+			return m.cycleSummaryDetail()
 		case "S":
-			if m.pr == nil {
-				m.status = "No PR loaded"
-				return m, nil
-			}
-			if m.opts.Config == nil || !m.opts.Config.AIConfigured() {
-				m.status = "AI not configured — set ai.default and ai.providers in config.yaml"
-				return m, nil
-			}
-			if m.summarizing {
-				m.status = "Already summarizing…"
-				return m, nil
-			}
-			m.summaryGen++
-			m.summarizing = true
-			m.summaryErr = ""
-			m.overviewSec = sectionSummary
-			m.screen = screenOverview
-			m.loading = true
-			prov, _ := m.opts.Config.DefaultAIProvider()
-			label := prov.Kind
-			if prov.Model != "" {
-				label += "/" + prov.Model
-			}
-			m.status = "Summarizing with " + label + "…"
-			m.renderOverview()
-			return m, m.loadSummary(m.summaryGen)
+			return m.beginSummarize()
 		case "d":
 			m.splitDiff = !m.splitDiff
 			m.renderDiff()
@@ -1185,10 +1174,49 @@ func (m Model) toggleSelectedTask() tea.Cmd {
 	}
 }
 
+func (m Model) cycleSummaryDetail() (tea.Model, tea.Cmd) {
+	m.summaryDetail = ai.NextDetail(m.summaryDetail)
+	m.status = "Summary detail: " + m.summaryDetail.String() + " (S to run)"
+	if m.screen == screenOverview {
+		m.renderOverview()
+	}
+	return m, nil
+}
+
+func (m Model) beginSummarize() (tea.Model, tea.Cmd) {
+	if m.pr == nil {
+		m.status = "No PR loaded"
+		return m, nil
+	}
+	if m.opts.Config == nil || !m.opts.Config.AIConfigured() {
+		m.status = "AI not configured — set ai.default and ai.providers in config.yaml"
+		return m, nil
+	}
+	if m.summarizing {
+		m.status = "Already summarizing…"
+		return m, nil
+	}
+	m.summaryGen++
+	m.summarizing = true
+	m.summaryErr = ""
+	m.overviewSec = sectionSummary
+	m.screen = screenOverview
+	m.loading = true
+	prov, _ := m.opts.Config.DefaultAIProvider()
+	label := prov.Kind
+	if prov.Model != "" {
+		label += "/" + prov.Model
+	}
+	m.status = "Summarizing (" + m.summaryDetail.String() + ") with " + label + "…"
+	m.renderOverview()
+	return m, m.loadSummary(m.summaryGen)
+}
+
 func (m Model) loadSummary(gen int) tea.Cmd {
 	cfg := m.opts.Config
 	host := m.opts.Host
 	pr := m.pr
+	detail := m.summaryDetail
 	files := append([]domain.FileChange(nil), m.files...)
 	tasks := append([]domain.Task(nil), m.tasks...)
 	diffs := map[string]string{}
@@ -1205,7 +1233,7 @@ func (m Model) loadSummary(gen int) tea.Cmd {
 	return func() tea.Msg {
 		p, err := cfg.DefaultAIProvider()
 		if err != nil {
-			return loadedSummaryMsg{gen: gen, err: err}
+			return loadedSummaryMsg{gen: gen, err: err, detail: detail}
 		}
 		completer, err := ai.New(ai.Options{
 			Provider:   p,
@@ -1213,7 +1241,7 @@ func (m Model) loadSummary(gen int) tea.Cmd {
 			ActiveHost: host,
 		})
 		if err != nil {
-			return loadedSummaryMsg{gen: gen, err: err, kind: p.Kind, model: p.Model}
+			return loadedSummaryMsg{gen: gen, err: err, kind: p.Kind, model: p.Model, detail: detail}
 		}
 		user := ai.PackContext(ai.ContextInput{
 			PR:              pr,
@@ -1229,11 +1257,11 @@ func (m Model) loadSummary(gen int) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 		defer cancel()
 		text, err := completer.Complete(ctx, ai.Request{
-			System: ai.SystemPrompt,
+			System: ai.SystemPromptFor(detail),
 			User:   user,
 			Model:  p.Model,
 		})
-		return loadedSummaryMsg{gen: gen, text: text, err: err, kind: completer.Kind(), model: p.Model}
+		return loadedSummaryMsg{gen: gen, text: text, err: err, kind: completer.Kind(), model: p.Model, detail: detail}
 	}
 }
 
@@ -1383,33 +1411,10 @@ func (m Model) updateOverview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.renderOverview()
 			return m, nil
+		case "s":
+			return m.cycleSummaryDetail()
 		case "S":
-			if m.pr == nil {
-				m.status = "No PR loaded"
-				return m, nil
-			}
-			if m.opts.Config == nil || !m.opts.Config.AIConfigured() {
-				m.status = "AI not configured — set ai.default and ai.providers in config.yaml"
-				return m, nil
-			}
-			if m.summarizing {
-				m.status = "Already summarizing…"
-				return m, nil
-			}
-			m.summaryGen++
-			m.summarizing = true
-			m.summaryErr = ""
-			m.overviewSec = sectionSummary
-			m.screen = screenOverview
-			m.loading = true
-			prov, _ := m.opts.Config.DefaultAIProvider()
-			label := prov.Kind
-			if prov.Model != "" {
-				label += "/" + prov.Model
-			}
-			m.status = "Summarizing with " + label + "…"
-			m.renderOverview()
-			return m, m.loadSummary(m.summaryGen)
+			return m.beginSummarize()
 		}
 	}
 	var cmd tea.Cmd
@@ -2010,7 +2015,7 @@ func (m *Model) renderOverview() {
 	}
 	content := formatOverview(
 		m.pr, m.tasks, m.taskCursor, entries, m.convCursor, m.overviewSec,
-		desc, sum, m.summaryErr, m.summarizing, m.width-2,
+		desc, sum, m.summaryErr, m.summarizing, m.summaryDetail.String(), m.width-2,
 	)
 	m.bodyVP.SetContent(content)
 }
@@ -2315,9 +2320,9 @@ func (m Model) reviewHelpLine() string {
 		}
 		open := openTaskCount(m.tasks)
 		if m.reviewReadOnly() {
-			return fmt.Sprintf("overview · %s · view only · tab section · j/k · S summarize · %d open tasks · p/esc back", sec, open)
+			return fmt.Sprintf("overview · %s · view only · tab section · j/k · S summarize · s detail · %d open tasks · p/esc back", sec, open)
 		}
-		return fmt.Sprintf("overview · %s · tab section · j/k · space toggle · S summarize · R reply · c add · %d open tasks · p/esc back", sec, open)
+		return fmt.Sprintf("overview · %s · tab section · j/k · space toggle · S summarize · s detail · R reply · c add · %d open tasks · p/esc back", sec, open)
 	}
 	if m.commenting {
 		if m.editingID != "" {
@@ -2344,12 +2349,12 @@ func (m Model) reviewHelpLine() string {
 	nConv := len(conversationComments(m.comments))
 	if m.reviewReadOnly() {
 		return fmt.Sprintf(
-			"tab pane(%s) · j/k · ^d/^u · [/] hunk · y yank · a %s · d %s · p overview(%d/%d) · S summarize · O open · view only · ? · q",
+			"tab pane(%s) · j/k · ^d/^u · [/] hunk · y yank · a %s · d %s · p overview(%d/%d) · S summarize · s detail · O open · view only · ? · q",
 			pane, view, layout, open, nConv,
 		)
 	}
 	return fmt.Sprintf(
-		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · ,/.|# target · R reply · e edit · x del · v range · y yank · a %s · d %s · p overview(%d/%d) · S summarize · r submit · O open · ? · q",
+		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · ,/.|# target · R reply · e edit · x del · v range · y yank · a %s · d %s · p overview(%d/%d) · S summarize · s detail · r submit · O open · ? · q",
 		pane, view, layout, open, nConv,
 	)
 }

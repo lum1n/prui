@@ -200,19 +200,23 @@ func formatConversationSection(entries []convEntry, cursor int, active bool, wid
 	return b.String()
 }
 
-func formatSummarySection(summary, summaryErr string, summarizing, active bool) string {
+func formatSummarySection(summary, summaryErr string, summarizing, active bool, detail string) string {
 	var b strings.Builder
-	b.WriteString(sectionHeader("Summary", active))
+	title := "Summary"
+	if detail != "" {
+		title = "Summary · " + detail
+	}
+	b.WriteString(sectionHeader(title, active))
 	b.WriteByte('\n')
 	switch {
 	case summarizing:
-		b.WriteString(mutedStyle.Render("  Summarizing…"))
+		b.WriteString(mutedStyle.Render("  Summarizing (" + detail + ")…"))
 		b.WriteByte('\n')
 	case summaryErr != "":
 		b.WriteString(errorStyle.Render("  " + summaryErr))
 		b.WriteByte('\n')
 	case strings.TrimSpace(summary) == "":
-		b.WriteString(mutedStyle.Render("  Press S to summarize (configure ai: in config.yaml)"))
+		b.WriteString(mutedStyle.Render("  Press S to summarize · s cycles detail (short/medium/full)"))
 		b.WriteByte('\n')
 	default:
 		b.WriteString(summary)
@@ -234,33 +238,32 @@ func formatOverview(
 	summary string,
 	summaryErr string,
 	summarizing bool,
+	summaryDetail string,
 	width int,
 ) string {
 	if width < 40 {
 		width = 40
 	}
 	var b strings.Builder
-	title := "Overview"
+	title := "Pull request"
 	if pr != nil && pr.Title != "" {
 		title = pr.Title
 	}
 	b.WriteString(titleStyle.Render(title))
-	b.WriteString("\n")
+	b.WriteByte('\n')
 	b.WriteString(formatPRStatus(pr, tasks))
-	b.WriteString("\n")
-	b.WriteString(mutedStyle.Render("tab section · S summarize · esc back"))
-	b.WriteString("\n\n")
-
+	b.WriteByte('\n')
+	b.WriteString(mutedStyle.Render("tab section · S summarize · s detail · esc back"))
+	b.WriteByte('\n')
+	b.WriteByte('\n')
 	b.WriteString(formatReviewsSection(prReviews(pr), width))
 	b.WriteByte('\n')
-
 	b.WriteString(formatTasksSection(tasks, taskCursor, sec == sectionTasks, width))
 	b.WriteByte('\n')
-
 	b.WriteString(sectionHeader("Description", sec == sectionDescription))
 	b.WriteByte('\n')
 	if strings.TrimSpace(description) == "" {
-		b.WriteString(mutedStyle.Render("  _No description_"))
+		b.WriteString(mutedStyle.Render("  (no description)"))
 		b.WriteByte('\n')
 	} else {
 		b.WriteString(description)
@@ -269,10 +272,8 @@ func formatOverview(
 		}
 	}
 	b.WriteByte('\n')
-
-	b.WriteString(formatSummarySection(summary, summaryErr, summarizing, sec == sectionSummary))
+	b.WriteString(formatSummarySection(summary, summaryErr, summarizing, sec == sectionSummary, summaryDetail))
 	b.WriteByte('\n')
-
 	b.WriteString(formatConversationSection(entries, convCursor, sec == sectionConversation, width))
 	return b.String()
 }

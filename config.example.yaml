@@ -46,6 +46,7 @@ ui:
 # AI summarize (key S). Selection is config-only (`ai.default`).
 ai:
   default: claude
+  summary_detail: medium   # short | medium | full
   max_context_bytes: 120000
   timeout_sec: 120
   providers:

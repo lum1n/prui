@@ -6,9 +6,10 @@ Terminal UI for reviewing pull requests on **GitHub** (cloud + Enterprise) and *
 
 - List and open PRs from the current git remote or an explicit target
 - Syntax-highlighted unified diffs (Chroma; pierre-inspired line annotations)
-- Draft inline comments on selected lines (range select where the host supports it)
-- Submit reviews: comment, approve, request changes (GitHub); comment + approve (Bitbucket)
-- Multi-host config with on-prem base URLs and optional custom CA
+- Draft inline / threaded comments, yank plain code, submit reviews
+- Multi-host config (on-prem URLs, optional custom CA)
+- Optional **AI summarize** (`S`) via Claude, GitHub Copilot (cloud/GHE), Codex, or OpenCode
+- Device login: `prui auth login` stores a token so you don’t need to export secrets
 
 ## Install
 
@@ -18,9 +19,26 @@ go install github.com/vegard/prui/cmd/prui@latest
 go build -o prui ./cmd/prui
 ```
 
+## Quick start
+
+```bash
+# 1. Config — copy and edit
+mkdir -p ~/.config/prui
+cp config.example.yaml ~/.config/prui/config.yaml
+
+# 2. Log in to each GitHub/GHE host you use (device/browser via gh)
+prui auth login --hostname github.com
+prui auth login --hostname ghe.example.com
+
+prui auth status
+prui                          # list open PRs for current git remote
+```
+
 ## Config
 
-`~/.config/prui/config.yaml`:
+Path: `~/.config/prui/config.yaml` (see [`config.example.yaml`](config.example.yaml)).
+
+### Forge hosts
 
 ```yaml
 hosts:
@@ -28,44 +46,66 @@ hosts:
     kind: github
     base_url: https://github.com
     api_url: https://api.github.com/
-    token_env: GITHUB_TOKEN
 
   - name: work-ghe
     kind: github
     base_url: https://ghe.example.com
     api_url: https://ghe.example.com/api/v3
-    cookie_env: GHE_COOKIE
-    # token_env: GHE_TOKEN   # optional fallback if cookies are not used
-    ca_cert: /path/to/corp-ca.pem
-
-  - name: bitbucket
-    kind: bitbucket_cloud
-    base_url: https://bitbucket.org
-    api_url: https://api.bitbucket.org/2.0
-    token_env: BITBUCKET_TOKEN
-    username: yourname   # required for app passwords
+    # match_hosts:           # if SSH hostname differs from base_url
+    #   - git.ghe.example.com
+    # ca_cert: /path/to/corp-ca.pem
 
   - name: work-bb
     kind: bitbucket_dc
     base_url: https://bitbucket.example.com
     api_url: https://bitbucket.example.com/rest/api/1.0
-    cookie_env: BB_COOKIE
+    cookie_env: BB_COOKIE    # Bitbucket DC often needs session cookies
     match_hosts:
       - git-ssh.example.com
-    # token_env: BB_TOKEN
-    # username: yourname
 
 defaults:
   host: work-bb
 
 ui:
-  diff: unified   # unified | split
-  files: selected # selected | all
+  diff: unified      # unified | split
+  files: selected    # selected | all
   theme: dark
+```
 
-# Optional AI summarize (key S). Selection is config-only — no in-app picker.
+For GitHub/GHE you usually **omit** `token_env` / `cookie_env` and use `prui auth login` instead.
+
+### Authentication
+
+Secrets are never stored in the YAML file.
+
+| Method | When to use |
+|--------|-------------|
+| `prui auth login --hostname HOST` | Preferred for GitHub.com / GHE. Saves token to `~/.config/prui/credentials.json` (0600). |
+| `prui auth login --host NAME` | Same, using a `hosts[].name` from config. |
+| `prui auth login --hostname HOST --client-id ID` | Native device flow (no `gh`); needs an OAuth App on that GHE. |
+| Env `token_env` / `cookie_env` | Override or Bitbucket cookies; a **set** cookie wins over token/store. |
+
+Resolution order for GitHub/GHE: **env cookie → env token → stored login → `gh auth token`**.
+
+```bash
+prui auth login --hostname ghe.example.com
+prui auth status
+prui auth logout --hostname ghe.example.com
+```
+
+Bitbucket cookie example:
+
+```bash
+export BB_COOKIE='JSESSIONID=...; BITBUCKETSESSIONID=...'
+```
+
+### AI summarize
+
+Press **`S`** in review or overview. Provider is chosen only from config (`ai.default`) — no in-app picker.
+
+```yaml
 ai:
-  default: claude
+  default: copilot-ghe          # name under providers
   max_context_bytes: 120000
   timeout_sec: 120
   providers:
@@ -73,66 +113,48 @@ ai:
       kind: claude
       model: claude-sonnet-4-5
       token_env: ANTHROPIC_API_KEY
-    # copilot (github.com or GHE via github_host / api_url):
-    #   kind: copilot
-    #   model: gpt-4.1
-    #   github_host: work-ghe
-    # codex / opencode use local CLIs (codex exec / opencode run)
-```
 
-Auth is never stored in the config file. Prefer:
+    # GitHub.com Copilot (uses github.com login / GITHUB_TOKEN / gh)
+    copilot:
+      kind: copilot
+      model: gpt-4o             # or omit to auto-pick; gpt-4.1 may be unavailable on some SKUs
 
-```bash
-prui auth login --hostname ghe.example.com   # device/browser via gh; token saved for prui
-prui auth status
-```
-
-Tokens are saved under `~/.config/prui/credentials.json` (mode 0600). You do **not** need to `export GHE_TOKEN`. Resolution order: env cookie/token → stored login → `gh auth token`.
-
-For a native device flow without `gh`, create an OAuth App on the GHE instance and pass `--client-id` (or set `oauth_client_id` on the host / Copilot provider).
-
-Cookie auth is still supported for forges that block PATs:
-
-```bash
-# Example: paste session cookies from the browser
-export GHE_COOKIE='user_session=...; _gh_sess=...; logged_in=yes'
-export BB_COOKIE='JSESSIONID=...; BITBUCKETSESSIONID=...'
-prui auth status
-```
-
-When both `cookie_env` and `token_env` are configured, a set cookie wins.
-
-If your git SSH hostname differs from `base_url` (common on Bitbucket DC), add it under `match_hosts`. With a single configured host (or `defaults.host` set), prui falls back to that host when the remote hostname is not listed.
-
-### Copilot while on Bitbucket
-
-You do not need a GHE entry under `hosts`. Minimal AI config:
-
-```yaml
-ai:
-  default: copilot-ghe
-  providers:
+    # GHE Copilot while reviewing Bitbucket (no GHE hosts entry required)
     copilot-ghe:
       kind: copilot
-      model: gpt-4.1
+      model: gpt-4o
       api_url: https://ghe.example.com/api/v3
+      # Or reuse a forge host:
+      # github_host: work-ghe
+
+    codex:
+      kind: codex
+      # model: ""               # optional --model for `codex exec`
+      # binary: codex
+
+    opencode:
+      kind: opencode
+      # model: ""
+      # binary: opencode
 ```
 
-```bash
-prui auth login --hostname ghe.example.com
-```
+**Copilot + GHE (typical with Bitbucket as the forge):**
 
-Then `S` in review uses that stored token.
+1. Set `api_url` (or `github_host`) on the provider as above.
+2. `prui auth login --hostname ghe.example.com`
+3. Open a PR → `S`
+
+If you see `The requested model is not supported`, change `model` to one your org allows (often `gpt-4o` or `gpt-4o-mini`), or leave `model` empty once auto-pick is available in your build.
 
 ## Usage
 
 ```bash
-export GHE_TOKEN=...
 prui                          # list open PRs for current git remote
 prui owner/repo#42            # open a specific PR
 prui https://ghe.example.com/org/repo/pull/42
 prui --host work-bb PROJECT/repo#7
 
+prui auth login --hostname ghe.example.com
 prui auth status
 prui pr list owner/repo
 ```
@@ -148,7 +170,7 @@ prui pr list owner/repo
 | `c` | New comment on line |
 | `p` | PR overview (status, tasks, description, summary, conversation) |
 | `C` | Overview focused on conversation |
-| `S` | AI summarize (uses `ai.default` from config) |
+| `S` | AI summarize (`ai.default`) |
 | `R` | Reply to selected comment (diff target / overview conversation) |
 | `,` / `.` | Prev/next reply target on the cursor line |
 | `1`–`9` | Jump to reply target `#N` on the cursor line |
@@ -163,8 +185,8 @@ prui pr list owner/repo
 | `?` | Help |
 | `q` | Back / quit |
 
-Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): `tab` switches Tasks / Description / Summary / Conversation; on Tasks, `space`/`enter` toggles; on Conversation, `j`/`k` + `R`/`c` as before. Press `S` to summarize with the configured AI provider. Yank (`y`): copies source text only (no line numbers or diff chrome) for the cursor line, or the `v` range.
+Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): `tab` switches Tasks / Description / Summary / Conversation; on Tasks, `space`/`enter` toggles; press `S` to summarize. Yank (`y`): source text only for the cursor line or `v` range.
 
 ## Architecture
 
-Forge differences are normalized behind `internal/provider.Host`. Diff parsing and highlighting live in `internal/diff`. Draft reviews persist under `~/.config/prui/drafts/`.
+Forge differences are normalized behind `internal/provider.Host`. Diff parsing and highlighting live in `internal/diff`. AI completers live in `internal/ai`. Draft reviews persist under `~/.config/prui/drafts/`; login tokens under `~/.config/prui/credentials.json`.

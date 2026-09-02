@@ -1,20 +1,24 @@
 # Example prui config — copy to ~/.config/prui/config.yaml
+#
+# GitHub/GHE: prefer `prui auth login --hostname …` (no token_env needed).
+# Bitbucket DC: cookie_env is still common when PATs are unavailable.
 
 hosts:
   - name: github
     kind: github
     base_url: https://github.com
     api_url: https://api.github.com/
-    token_env: GITHUB_TOKEN
 
   - name: work-ghe
     kind: github
     base_url: https://ghe.example.com
     api_url: https://ghe.example.com/api/v3
-    # Prefer cookie auth when the company does not issue PATs:
-    cookie_env: GHE_COOKIE
-    # token_env: GHE_TOKEN
+    # match_hosts:
+    #   - git.ghe.example.com
     # ca_cert: /etc/ssl/certs/corp-ca.pem
+    # Optional overrides (usually skip — use prui auth login):
+    # token_env: GHE_TOKEN
+    # cookie_env: GHE_COOKIE
 
   - name: bitbucket
     kind: bitbucket_cloud
@@ -28,11 +32,8 @@ hosts:
     base_url: https://bitbucket.example.com
     api_url: https://bitbucket.example.com/rest/api/1.0
     cookie_env: BB_COOKIE
-    # SSH clone host often differs from the web/API host — map it explicitly:
     match_hosts:
       - git-ssh.example.com
-    # token_env: BB_TOKEN
-    # username: yourname
 
 defaults:
   host: work-bb
@@ -42,8 +43,8 @@ ui:
   files: selected # selected | all
   theme: dark
 
-# Optional: AI summarize (key S). Selection is config-only.
-# For Copilot on GHE while reviewing Bitbucket, only api_url is required — then:
+# AI summarize (key S). Selection is config-only.
+# Copilot GHE while on Bitbucket: set api_url, then:
 #   prui auth login --hostname ghe.example.com
 ai:
   default: copilot-ghe
@@ -56,16 +57,18 @@ ai:
       token_env: ANTHROPIC_API_KEY
     copilot-ghe:
       kind: copilot
-      model: gpt-4.1
+      model: gpt-4o            # gpt-4.1 is not available on all Copilot SKUs
       api_url: https://ghe.example.com/api/v3
-      # optional native device flow (otherwise `prui auth login` wraps gh):
-      # oauth_client_id: Iv1.xxxxx
+      # github_host: work-ghe  # alternative: reuse hosts entry
+      # oauth_client_id: Iv1.xxxxx  # native device flow without gh
     copilot:
       kind: copilot
-      model: gpt-4.1
+      model: gpt-4o
     codex:
       kind: codex
       model: ""
+      # binary: codex
     opencode:
       kind: opencode
       model: ""
+      # binary: opencode

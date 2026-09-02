@@ -275,11 +275,60 @@ func (c *Client) Unapprove(ctx context.Context, ref domain.PRRef) error {
 	return err
 }
 
+func (c *Client) ListTasks(ctx context.Context, ref domain.PRRef) ([]domain.Task, error) {
+	u := c.prURL(ref, "tasks?pagelen=100")
+	var page struct {
+		Values []bbTask `json:"values"`
+	}
+	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, u, c.headers(), nil, &page); err != nil {
+		return nil, err
+	}
+	out := make([]domain.Task, 0, len(page.Values))
+	for _, t := range page.Values {
+		out = append(out, t.toDomain())
+	}
+	return out, nil
+}
+
+func (c *Client) SetTaskDone(ctx context.Context, ref domain.PRRef, taskID string, done bool) error {
+	state := "UNRESOLVED"
+	if done {
+		state = "RESOLVED"
+	}
+	body := map[string]any{"state": state}
+	_, err := httputil.DoJSON(ctx, c.http, http.MethodPut, c.prURL(ref, "tasks/"+url.PathEscape(taskID)), c.headers(), body, nil)
+	return err
+}
+
+type bbTask struct {
+	ID      int    `json:"id"`
+	Content struct {
+		Raw string `json:"raw"`
+	} `json:"content"`
+	State  string `json:"state"`
+	Author struct {
+		DisplayName string `json:"display_name"`
+		Nickname    string `json:"nickname"`
+	} `json:"creator"`
+}
+
+func (t bbTask) toDomain() domain.Task {
+	done := strings.EqualFold(t.State, "RESOLVED")
+	return domain.Task{
+		ID:       strconv.Itoa(t.ID),
+		Body:     t.Content.Raw,
+		Done:     done,
+		Author:   domain.FormatAuthor(t.Author.Nickname, t.Author.DisplayName),
+		Required: true,
+	}
+}
+
 type bbPR struct {
 	ID          int    `json:"id"`
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	State       string `json:"state"`
+	Draft       bool   `json:"draft"`
 	Author      struct {
 		DisplayName string `json:"display_name"`
 		Nickname    string `json:"nickname"`
@@ -310,6 +359,7 @@ func (p bbPR) toDomain(repo domain.RepoRef) domain.PullRequest {
 		Body:      p.Description,
 		Author:    domain.FormatAuthor(p.Author.Nickname, p.Author.DisplayName),
 		State:     strings.ToLower(p.State),
+		Draft:     p.Draft,
 		URL:       p.Links.HTML.Href,
 		HeadSHA:   p.Source.Commit.Hash,
 		BaseSHA:   p.Destination.Commit.Hash,

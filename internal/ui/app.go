@@ -25,8 +25,7 @@ const (
 	screenReview
 	screenSubmit
 	screenHelp
-	screenBody
-	screenConversation
+	screenOverview
 )
 
 type pane int
@@ -115,6 +114,9 @@ type Model struct {
 	replyParentID  string // non-empty when drafting a reply in a thread
 	threadTargetID string // remote comment selected as reply target on the cursor line
 	convCursor     int    // selected row in conversation thread list
+	tasks          []domain.Task
+	taskCursor     int
+	overviewSec    overviewSection
 	activePath     string // last requested / shown file path
 	leftWidth      int
 	rightWidth     int
@@ -133,6 +135,7 @@ type loadedReviewMsg struct {
 	pr       *domain.PullRequest
 	files    []domain.FileChange
 	comments []domain.Comment
+	tasks    []domain.Task
 	session  *review.Session
 	err      error
 }
@@ -147,6 +150,13 @@ type loadedAllDiffsMsg struct {
 	err   error
 }
 type submitDoneMsg struct{ err error }
+type loadedTasksMsg struct {
+	tasks []domain.Task
+	err   error
+}
+type taskToggledMsg struct {
+	err error
+}
 
 // NewModel creates the root TUI model.
 func NewModel(opts Options) Model {
@@ -202,18 +212,18 @@ const defaultHelp = `Keys
   tab       switch pane
   enter     open PR / load file
   c         new comment on line
-  R         reply to selected comment (diff: ▸ target · conversation: cursor)
+  R         reply to selected comment (diff: ▸ target · overview conversation)
   ,/.       prev/next reply target on line
   1-9       jump to reply target #N on line
   e         edit draft on line
   x         delete draft on line
   v         toggle range select
   r         submit review
-  p         PR description (markdown)
+  p         PR overview (status · tasks · description · conversation)
+  C         PR overview → conversation section
   d         toggle unified/split layout
   a         toggle this-file / all-files view
   [ ]       prev/next hunk
-  C         PR conversation (threaded general comments)
   o         show PR URL in status
   O         open PR in browser
   ?         help
@@ -221,12 +231,12 @@ const defaultHelp = `Keys
 
 Inline comment: enter save, esc cancel
 Diff thread: ,/. or 1-9 pick target · R reply
-Conversation: j/k select · R reply · c new
+Overview: tab section · j/k · space toggle task · R reply · c new
 
 Views
   this-file   only the selected path (default)
   all-files   every path in one scroll; file list + section headers track focus
-  conversation  PR-level comments (key C)`
+  overview    status, tasks, description, conversation (key p)`
 
 func (m Model) Init() tea.Cmd {
 	if m.opts.PRNumber > 0 {
@@ -256,11 +266,12 @@ func (m Model) loadReview(num int) tea.Cmd {
 			return loadedReviewMsg{err: err}
 		}
 		comments, _ := m.opts.Provider.ListComments(ctx, ref)
+		tasks, _ := m.opts.Provider.ListTasks(ctx, ref)
 		session, _ := review.Load(m.opts.Host.Name, ref)
 		if remote, err := m.opts.Provider.StartReview(ctx, ref); err == nil && remote != nil {
 			session.Draft.RemoteID = remote.RemoteID
 		}
-		return loadedReviewMsg{pr: pr, files: files, comments: comments, session: session}
+		return loadedReviewMsg{pr: pr, files: files, comments: comments, tasks: tasks, session: session}
 	}
 }
 
@@ -338,6 +349,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pr = msg.pr
 		m.files = msg.files
 		m.comments = msg.comments
+		m.tasks = msg.tasks
+		m.taskCursor = 0
+		if m.pr != nil {
+			for _, t := range m.tasks {
+				if t.Required && !t.Done {
+					m.pr.Blocked = true
+					break
+				}
+			}
+		}
 		m.session = msg.session
 		m.screen = screenReview
 		m.diffCache = map[string]*domain.FileDiff{}
@@ -433,6 +454,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "Review submitted"
 		m.screen = screenReview
 		return m, m.loadReview(m.pr.Ref.Number)
+
+	case loadedTasksMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.status = "Tasks: " + msg.err.Error()
+			m.tasks = nil
+		} else {
+			m.tasks = msg.tasks
+			if m.taskCursor >= len(m.tasks) {
+				m.taskCursor = 0
+			}
+			if m.pr != nil {
+				m.pr.Blocked = false
+				for _, t := range m.tasks {
+					if t.Required && !t.Done {
+						m.pr.Blocked = true
+						break
+					}
+				}
+			}
+		}
+		if m.screen == screenOverview {
+			m.renderOverview()
+		}
+		return m, nil
+
+	case taskToggledMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.status = "Task update failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.status = "Task updated"
+		return m, m.loadTasks()
 	}
 
 	switch m.screen {
@@ -452,19 +507,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case screenBody:
-		if key, ok := msg.(tea.KeyMsg); ok {
-			switch key.String() {
-			case "q", "esc", "p":
-				m.screen = screenReview
-				return m, nil
-			}
-		}
-		var cmd tea.Cmd
-		m.bodyVP, cmd = m.bodyVP.Update(msg)
-		return m, cmd
-	case screenConversation:
-		return m.updateConversation(msg)
+	case screenOverview:
+		return m.updateOverview(msg)
 	}
 	return m, nil
 }
@@ -537,14 +581,17 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenHelp
 			return m, nil
 		case "p":
-			m.showBody()
-			m.screen = screenBody
-			return m, nil
+			m.overviewSec = sectionTasks
+			m.screen = screenOverview
+			m.loading = true
+			m.renderOverview()
+			return m, m.loadTasks()
 		case "C":
-			m.convCursor = 0
-			m.showConversation()
-			m.screen = screenConversation
-			return m, nil
+			m.overviewSec = sectionConversation
+			m.screen = screenOverview
+			m.loading = true
+			m.renderOverview()
+			return m, m.loadTasks()
 		case "d":
 			m.splitDiff = !m.splitDiff
 			m.renderDiff()
@@ -860,7 +907,7 @@ func (m *Model) beginComment(editID string) tea.Cmd {
 		m.comment.SetValue("")
 		m.status = "Commenting — enter save, esc cancel"
 	}
-	if m.screen == screenConversation {
+	if m.screen == screenOverview {
 		m.commentGeneral = true
 	} else {
 		m.pane = paneDiff
@@ -868,8 +915,8 @@ func (m *Model) beginComment(editID string) tea.Cmd {
 	m.comment.Focus()
 	m.commenting = true
 	m.layout()
-	if m.screen == screenConversation {
-		m.showConversation()
+	if m.screen == screenOverview {
+		m.renderOverview()
 	}
 	return textarea.Blink
 }
@@ -883,8 +930,9 @@ func (m *Model) beginReply(parentID string, general bool) tea.Cmd {
 	m.commenting = true
 	m.status = "Reply — enter save, esc cancel"
 	if general {
+		m.overviewSec = sectionConversation
 		m.layout()
-		m.showConversation()
+		m.renderOverview()
 	} else {
 		m.pane = paneDiff
 		m.layout()
@@ -900,8 +948,9 @@ func (m *Model) beginGeneralComment() tea.Cmd {
 	m.comment.Focus()
 	m.commenting = true
 	m.status = "General comment — enter save, esc cancel"
+	m.overviewSec = sectionConversation
 	m.layout()
-	m.showConversation()
+	m.renderOverview()
 	return textarea.Blink
 }
 
@@ -909,7 +958,38 @@ func (m *Model) conversationEntries() []convEntry {
 	return buildConversationEntries(m.comments, m.sessionDrafts())
 }
 
-func (m Model) updateConversation(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) loadTasks() tea.Cmd {
+	if m.pr == nil {
+		return nil
+	}
+	num := m.pr.Ref.Number
+	repo := m.opts.Repo
+	prov := m.opts.Provider
+	return func() tea.Msg {
+		ctx := context.Background()
+		tasks, err := prov.ListTasks(ctx, domain.PRRef{Repo: repo, Number: num})
+		return loadedTasksMsg{tasks: tasks, err: err}
+	}
+}
+
+func (m Model) toggleSelectedTask() tea.Cmd {
+	if m.taskCursor < 0 || m.taskCursor >= len(m.tasks) || m.pr == nil {
+		return nil
+	}
+	t := m.tasks[m.taskCursor]
+	done := !t.Done
+	num := m.pr.Ref.Number
+	repo := m.opts.Repo
+	prov := m.opts.Provider
+	id := t.ID
+	return func() tea.Msg {
+		ctx := context.Background()
+		err := prov.SetTaskDone(ctx, domain.PRRef{Repo: repo, Number: num}, id, done)
+		return taskToggledMsg{err: err}
+	}
+}
+
+func (m Model) updateOverview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.commenting {
 		return m.updateInlineComment(msg)
 	}
@@ -917,30 +997,76 @@ func (m Model) updateConversation(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q", "esc", "C":
+		case "q", "esc", "p", "C":
 			m.screen = screenReview
 			m.commenting = false
 			m.commentGeneral = false
 			m.replyParentID = ""
 			m.layout()
 			return m, nil
+		case "tab":
+			m.overviewSec = m.overviewSec.next()
+			m.renderOverview()
+			return m, nil
+		case "shift+tab":
+			m.overviewSec = m.overviewSec.prev()
+			m.renderOverview()
+			return m, nil
 		case "j", "down":
-			if len(entries) == 0 {
+			switch m.overviewSec {
+			case sectionTasks:
+				if len(m.tasks) == 0 {
+					return m, nil
+				}
+				m.taskCursor = (m.taskCursor + 1) % len(m.tasks)
+				m.renderOverview()
+				return m, nil
+			case sectionConversation:
+				if len(entries) == 0 {
+					return m, nil
+				}
+				m.convCursor = (m.convCursor + 1) % len(entries)
+				m.renderOverview()
+				return m, nil
+			case sectionDescription:
+				m.bodyVP.LineDown(1)
 				return m, nil
 			}
-			m.convCursor = (m.convCursor + 1) % len(entries)
-			m.showConversation()
-			return m, nil
 		case "k", "up":
-			if len(entries) == 0 {
+			switch m.overviewSec {
+			case sectionTasks:
+				if len(m.tasks) == 0 {
+					return m, nil
+				}
+				m.taskCursor = (m.taskCursor - 1 + len(m.tasks)) % len(m.tasks)
+				m.renderOverview()
+				return m, nil
+			case sectionConversation:
+				if len(entries) == 0 {
+					return m, nil
+				}
+				m.convCursor = (m.convCursor - 1 + len(entries)) % len(entries)
+				m.renderOverview()
+				return m, nil
+			case sectionDescription:
+				m.bodyVP.LineUp(1)
 				return m, nil
 			}
-			m.convCursor = (m.convCursor - 1 + len(entries)) % len(entries)
-			m.showConversation()
-			return m, nil
+		case " ", "enter":
+			if m.overviewSec != sectionTasks {
+				return m, nil
+			}
+			if len(m.tasks) == 0 {
+				m.status = "No tasks"
+				return m, nil
+			}
+			m.loading = true
+			return m, m.toggleSelectedTask()
 		case "c":
+			m.overviewSec = sectionConversation
 			return m, m.beginGeneralComment()
 		case "R":
+			m.overviewSec = sectionConversation
 			if len(entries) == 0 {
 				m.status = "No comment to reply to"
 				return m, nil
@@ -959,6 +1085,7 @@ func (m Model) updateConversation(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.beginReply(parent, true)
 		case "e":
+			m.overviewSec = sectionConversation
 			if len(entries) == 0 {
 				m.status = "No drafts"
 				return m, nil
@@ -973,6 +1100,7 @@ func (m Model) updateConversation(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.beginComment(e.ID)
 		case "x":
+			m.overviewSec = sectionConversation
 			if len(entries) == 0 {
 				m.status = "No drafts"
 				return m, nil
@@ -990,7 +1118,7 @@ func (m Model) updateConversation(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.convCursor > 0 {
 				m.convCursor--
 			}
-			m.showConversation()
+			m.renderOverview()
 			return m, nil
 		}
 	}
@@ -1020,8 +1148,9 @@ func (m Model) updateInlineComment(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.layout()
 			m.status = "Comment cancelled"
 			if wasGeneral {
-				m.screen = screenConversation
-				m.showConversation()
+				m.screen = screenOverview
+				m.overviewSec = sectionConversation
+				m.renderOverview()
 			}
 			return m, nil
 		case "enter", "ctrl+s":
@@ -1083,8 +1212,9 @@ func (m Model) updateInlineComment(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.comment.Blur()
 			m.layout()
 			if wasGeneral {
-				m.screen = screenConversation
-				m.showConversation()
+				m.screen = screenOverview
+				m.overviewSec = sectionConversation
+				m.renderOverview()
 			} else {
 				m.renderDiff()
 			}
@@ -1340,7 +1470,7 @@ func (m *Model) layout() {
 	titleH := 1
 	statusH := 1
 	helpH := 0
-	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenConversation {
+	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenOverview {
 		helpH = 1
 	}
 	contentH := m.height - titleH - statusH - helpH
@@ -1378,7 +1508,7 @@ func (m *Model) layout() {
 	m.diffVP.Height = diffH - 2
 	m.bodyVP.Width = m.width
 	bodyH := contentH
-	if m.screen == screenConversation && m.commenting {
+	if m.screen == screenOverview && m.commenting {
 		bodyH = contentH - commentH
 		if bodyH < 3 {
 			bodyH = 3
@@ -1392,20 +1522,7 @@ func (m *Model) layout() {
 	m.renderDiff()
 }
 
-func (m *Model) showBody() {
-	raw := ""
-	if m.pr != nil {
-		raw = m.pr.Body
-	}
-	if raw == "" {
-		raw = "_No description_"
-	}
-	rendered := renderMarkdown(raw, m.width-2)
-	m.bodyVP.SetContent(rendered)
-	m.bodyVP.GotoTop()
-}
-
-func (m *Model) showConversation() {
+func (m *Model) renderOverview() {
 	entries := m.conversationEntries()
 	if len(entries) == 0 {
 		m.convCursor = 0
@@ -1414,9 +1531,19 @@ func (m *Model) showConversation() {
 	} else if m.convCursor < 0 {
 		m.convCursor = 0
 	}
-	content := formatConversation(entries, m.convCursor, m.width-2)
+	if len(m.tasks) == 0 {
+		m.taskCursor = 0
+	} else if m.taskCursor >= len(m.tasks) {
+		m.taskCursor = len(m.tasks) - 1
+	}
+
+	raw := ""
+	if m.pr != nil {
+		raw = m.pr.Body
+	}
+	desc := renderMarkdown(raw, m.width-4)
+	content := formatOverview(m.pr, m.tasks, m.taskCursor, entries, m.convCursor, m.overviewSec, desc, m.width-2)
 	m.bodyVP.SetContent(content)
-	m.bodyVP.GotoTop()
 }
 
 func renderMarkdown(src string, width int) string {
@@ -1641,9 +1768,7 @@ func (m Model) View() string {
 		body = strings.Join(lines, "\n")
 	case screenHelp:
 		body = m.helpText
-	case screenBody:
-		body = m.bodyVP.View()
-	case screenConversation:
+	case screenOverview:
 		inner := m.bodyVP.View()
 		if m.commenting {
 			label := "✎ general comment  (enter save · esc cancel)"
@@ -1670,7 +1795,7 @@ func (m Model) View() string {
 
 	helpH := 0
 	var helpBar string
-	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenConversation {
+	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenOverview {
 		helpH = 1
 		helpBar = helpBarStyle.Width(m.width).Render(truncate(m.reviewHelpLine(), m.width))
 	}
@@ -1690,12 +1815,19 @@ func (m Model) reviewHelpLine() string {
 	if m.screen == screenSubmit {
 		return "j/k choose · enter submit · esc cancel"
 	}
-	if m.screen == screenConversation {
+	if m.screen == screenOverview {
 		if m.commenting {
 			return "enter save · esc cancel"
 		}
-		n := len(m.conversationEntries())
-		return fmt.Sprintf("conversation · %d · j/k select · R reply · c add · e edit draft · x del · C/esc back", n)
+		sec := "tasks"
+		switch m.overviewSec {
+		case sectionDescription:
+			sec = "description"
+		case sectionConversation:
+			sec = "conversation"
+		}
+		open := openTaskCount(m.tasks)
+		return fmt.Sprintf("overview · %s · tab section · j/k · space toggle task · R reply · c add · %d open tasks · p/esc back", sec, open)
 	}
 	if m.commenting {
 		if m.editingID != "" {
@@ -1718,10 +1850,11 @@ func (m Model) reviewHelpLine() string {
 	if m.pane == paneDiff {
 		pane = "diff"
 	}
+	open := openTaskCount(m.tasks)
 	nConv := len(conversationComments(m.comments))
 	return fmt.Sprintf(
-		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · ,/.|# target · R reply · e edit · x del · v range · a %s · d %s · C talk(%d) · r submit · O open · ? · q",
-		pane, view, layout, nConv,
+		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · ,/.|# target · R reply · e edit · x del · v range · a %s · d %s · p overview(%d/%d) · r submit · O open · ? · q",
+		pane, view, layout, open, nConv,
 	)
 }
 

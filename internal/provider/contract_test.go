@@ -37,8 +37,20 @@ func TestGitHubContract(t *testing.T) {
 		}
 	})
 	mux.HandleFunc("/api/v3/repos/acme/widgets/pulls/1", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch || r.Method == http.MethodPost {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"number": 1, "title": "Hello", "body": "- [x] one\n- [ ] two", "state": "open", "draft": false,
+				"user": map[string]any{"login": "alice"},
+				"html_url": "http://example/pull/1",
+				"head": map[string]any{"sha": "abc"},
+				"base": map[string]any{"sha": "def"},
+				"created_at": "2024-01-01T00:00:00Z",
+				"updated_at": "2024-01-01T00:00:00Z",
+			})
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"number": 1, "title": "Hello", "body": "body", "state": "open",
+			"number": 1, "title": "Hello", "body": "- [ ] one\n- [x] two", "state": "open", "draft": true,
 			"user": map[string]any{"login": "alice"},
 			"html_url": "http://example/pull/1",
 			"head": map[string]any{"sha": "abc"},
@@ -135,6 +147,24 @@ func TestBitbucketCloudContract(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{"approved": true})
 	})
+	mux.HandleFunc("/2.0/repositories/acme/widgets/pullrequests/1/tasks", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut || strings.Contains(r.URL.Path, "/tasks/") {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 9, "state": "RESOLVED"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"values": []map[string]any{{
+				"id": 9, "state": "UNRESOLVED",
+				"content": map[string]any{"raw": "fix tests"},
+				"creator": map[string]any{"nickname": "bob", "display_name": "Bob"},
+			}},
+		})
+	})
+	mux.HandleFunc("/2.0/repositories/acme/widgets/pullrequests/1/tasks/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 9, "state": "RESOLVED"})
+	})
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -196,6 +226,18 @@ func TestBitbucketDCContract(t *testing.T) {
 	mux.HandleFunc("/rest/api/1.0/projects/PROJ/repos/repo/pull-requests/1/comments", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+	})
+	mux.HandleFunc("/rest/api/1.0/projects/PROJ/repos/repo/pull-requests/1/blocker-comments", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"values": []map[string]any{{
+				"id": 7, "text": "Address feedback", "state": "OPEN", "version": 1,
+				"author": map[string]any{"slug": "bob", "displayName": "Bob"},
+			}},
+		})
+	})
+	mux.HandleFunc("/rest/api/1.0/projects/PROJ/repos/repo/pull-requests/1/blocker-comments/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 7, "state": "RESOLVED", "version": 2})
 	})
 	mux.HandleFunc("/rest/api/1.0/projects/PROJ/repos/repo/pull-requests/1/approve", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"approved": true})
@@ -323,6 +365,15 @@ func runHostContract(t *testing.T, h provider.Host, repo domain.RepoRef, num int
 	}
 	if _, err := h.ListComments(ctx, ref); err != nil {
 		t.Fatalf("comments: %v", err)
+	}
+	tasks, err := h.ListTasks(ctx, ref)
+	if err != nil {
+		t.Fatalf("tasks: %v", err)
+	}
+	if len(tasks) > 0 {
+		if err := h.SetTaskDone(ctx, ref, tasks[0].ID, true); err != nil {
+			t.Fatalf("set task: %v", err)
+		}
 	}
 	draft, err := h.StartReview(ctx, ref)
 	if err != nil {

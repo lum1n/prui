@@ -80,11 +80,23 @@ type PullRequest struct {
 	Body      string
 	Author    string
 	State     string
+	Draft     bool
+	Blocked   bool // open required tasks / merge blockers
 	URL       string
 	HeadSHA   string
 	BaseSHA   string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// Task is a required or optional PR checklist/blocker item.
+type Task struct {
+	ID       string
+	Body     string
+	Done     bool
+	Author   string
+	Required bool
+	Version  int // Bitbucket DC optimistic lock; 0 when unused
 }
 
 // FileChange is one path in a PR diff.

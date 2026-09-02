@@ -98,8 +98,9 @@ prui pr list owner/repo
 | `Ctrl+d`/`Ctrl+u` | Page down / up (half screen) |
 | `Tab` | Files ↔ diff |
 | `Enter` | Open PR / load file |
-| `c` | New comment on line |
-| `R` | Reply to selected comment (diff target / conversation cursor) |
+| `p` | PR overview (status, tasks, description, conversation) |
+| `C` | Overview focused on conversation |
+| `R` | Reply to selected comment (diff target / overview conversation) |
 | `,` / `.` | Prev/next reply target on the cursor line |
 | `1`–`9` | Jump to reply target `#N` on the cursor line |
 | `e` | Edit draft on line |
@@ -107,13 +108,12 @@ prui pr list owner/repo
 | `v` | Range select |
 | `r` | Submit review |
 | `[`/`]` | Prev/next hunk |
-| `C` | PR conversation (threaded general comments) |
 | `o` | Show PR URL |
 | `O` | Open PR in browser |
 | `?` | Help |
 | `q` | Back / quit |
 
-Comment editor: `enter`/`ctrl+s` save, `esc` cancel. `e`/`x` edit or delete the draft on the cursor line. On a threaded line, targets are numbered when the line is selected (`▸` marks the reply target); use `,`/`.` or `1`–`9`, then `R`. In conversation, `j`/`k` select a comment and `R` replies in that thread.
+Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): `tab` switches Tasks / Description / Conversation; on Tasks, `space`/`enter` toggles; on Conversation, `j`/`k` + `R`/`c` as before.
 
 ## Architecture
 

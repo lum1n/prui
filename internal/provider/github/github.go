@@ -211,6 +211,29 @@ func (c *Client) ListComments(ctx context.Context, ref domain.PRRef) ([]domain.C
 	return out, nil
 }
 
+func (c *Client) ListTasks(ctx context.Context, ref domain.PRRef) ([]domain.Task, error) {
+	p, _, err := c.gh.PullRequests.Get(ctx, ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	if err != nil {
+		return nil, err
+	}
+	return parseChecklistTasks(p.GetBody()), nil
+}
+
+func (c *Client) SetTaskDone(ctx context.Context, ref domain.PRRef, taskID string, done bool) error {
+	p, _, err := c.gh.PullRequests.Get(ctx, ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	if err != nil {
+		return err
+	}
+	next, err := setChecklistDone(p.GetBody(), taskID, done)
+	if err != nil {
+		return err
+	}
+	_, _, err = c.gh.PullRequests.Edit(ctx, ref.Repo.Owner, ref.Repo.Name, ref.Number, &github.PullRequest{
+		Body: github.Ptr(next),
+	})
+	return err
+}
+
 func (c *Client) StartReview(ctx context.Context, ref domain.PRRef) (*domain.DraftReview, error) {
 	// Resume pending review if one exists.
 	reviews, _, err := c.gh.PullRequests.ListReviews(ctx, ref.Repo.Owner, ref.Repo.Name, ref.Number, &github.ListOptions{PerPage: 50})
@@ -364,12 +387,15 @@ func (c *Client) Unapprove(ctx context.Context, ref domain.PRRef) error {
 }
 
 func mapPR(repo domain.RepoRef, p *github.PullRequest) domain.PullRequest {
+	tasks := parseChecklistTasks(p.GetBody())
 	return domain.PullRequest{
 		Ref:       domain.PRRef{Repo: repo, Number: p.GetNumber()},
 		Title:     p.GetTitle(),
 		Body:      p.GetBody(),
 		Author:    domain.FormatAuthor(p.GetUser().GetLogin(), p.GetUser().GetName()),
 		State:     p.GetState(),
+		Draft:     p.GetDraft(),
+		Blocked:   anyOpenRequired(tasks),
 		URL:       p.GetHTMLURL(),
 		HeadSHA:   p.GetHead().GetSHA(),
 		BaseSHA:   p.GetBase().GetSHA(),

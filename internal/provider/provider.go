@@ -14,6 +14,8 @@ type Host interface {
 	ListFiles(ctx context.Context, ref domain.PRRef) ([]domain.FileChange, error)
 	GetFileDiff(ctx context.Context, ref domain.PRRef, path string) (*domain.FileDiff, error)
 	ListComments(ctx context.Context, ref domain.PRRef) ([]domain.Comment, error)
+	ListTasks(ctx context.Context, ref domain.PRRef) ([]domain.Task, error)
+	SetTaskDone(ctx context.Context, ref domain.PRRef, taskID string, done bool) error
 	StartReview(ctx context.Context, ref domain.PRRef) (*domain.DraftReview, error)
 	SubmitReview(ctx context.Context, ref domain.PRRef, draft domain.DraftReview) error
 	Approve(ctx context.Context, ref domain.PRRef) error

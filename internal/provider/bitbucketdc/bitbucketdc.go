@@ -331,6 +331,146 @@ func (c *Client) Unapprove(ctx context.Context, ref domain.PRRef) error {
 	return err
 }
 
+func (c *Client) ListTasks(ctx context.Context, ref domain.PRRef) ([]domain.Task, error) {
+	tasks, err := c.listBlockerComments(ctx, ref)
+	if err == nil {
+		return tasks, nil
+	}
+	// Legacy /tasks on older Bitbucket Server.
+	legacy, lerr := c.listLegacyTasks(ctx, ref)
+	if lerr == nil {
+		return legacy, nil
+	}
+	return nil, err
+}
+
+func (c *Client) listBlockerComments(ctx context.Context, ref domain.PRRef) ([]domain.Task, error) {
+	u := c.prPath(ref) + "/blocker-comments?limit=200"
+	var page struct {
+		Values []dcBlockerComment `json:"values"`
+	}
+	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, u, c.headers(), nil, &page); err != nil {
+		return nil, err
+	}
+	out := make([]domain.Task, 0, len(page.Values))
+	for _, t := range page.Values {
+		out = append(out, t.toDomain())
+	}
+	return out, nil
+}
+
+func (c *Client) listLegacyTasks(ctx context.Context, ref domain.PRRef) ([]domain.Task, error) {
+	u := c.prPath(ref) + "/tasks?limit=200"
+	var page struct {
+		Values []dcLegacyTask `json:"values"`
+	}
+	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, u, c.headers(), nil, &page); err != nil {
+		return nil, err
+	}
+	out := make([]domain.Task, 0, len(page.Values))
+	for _, t := range page.Values {
+		out = append(out, t.toDomain())
+	}
+	return out, nil
+}
+
+func (c *Client) SetTaskDone(ctx context.Context, ref domain.PRRef, taskID string, done bool) error {
+	id, err := strconv.Atoi(taskID)
+	if err != nil {
+		return fmt.Errorf("task id: %w", err)
+	}
+	state := "OPEN"
+	if done {
+		state = "RESOLVED"
+	}
+	// Need current version for optimistic lock.
+	tasks, err := c.ListTasks(ctx, ref)
+	if err != nil {
+		return err
+	}
+	version := 0
+	found := false
+	for _, t := range tasks {
+		if t.ID == taskID {
+			version = t.Version
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+	body := map[string]any{
+		"id":      id,
+		"version": version,
+		"state":   state,
+	}
+	u := fmt.Sprintf("%s/blocker-comments/%d", c.prPath(ref), id)
+	if _, err := httputil.DoJSON(ctx, c.http, http.MethodPut, u, c.headers(), body, nil); err != nil {
+		// Fallback legacy task endpoint.
+		legacy := fmt.Sprintf("%s/tasks/%d", c.api, id)
+		_, lerr := httputil.DoJSON(ctx, c.http, http.MethodPut, legacy, c.headers(), body, nil)
+		if lerr != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type dcBlockerComment struct {
+	ID      int    `json:"id"`
+	Text    string `json:"text"`
+	State   string `json:"state"`
+	Version int    `json:"version"`
+	Author  struct {
+		Name        string `json:"name"`
+		DisplayName string `json:"displayName"`
+		Slug        string `json:"slug"`
+	} `json:"author"`
+}
+
+func (t dcBlockerComment) toDomain() domain.Task {
+	login := t.Author.Slug
+	if login == "" {
+		login = t.Author.Name
+	}
+	return domain.Task{
+		ID:       strconv.Itoa(t.ID),
+		Body:     t.Text,
+		Done:     strings.EqualFold(t.State, "RESOLVED"),
+		Author:   domain.FormatAuthor(login, t.Author.DisplayName),
+		Required: true,
+		Version:  t.Version,
+	}
+}
+
+type dcLegacyTask struct {
+	ID      int    `json:"id"`
+	Text    string `json:"text"`
+	State   string `json:"state"`
+	Version int    `json:"version"`
+	Author  struct {
+		Name        string `json:"name"`
+		DisplayName string `json:"displayName"`
+		Slug        string `json:"slug"`
+	} `json:"author"`
+}
+
+func (t dcLegacyTask) toDomain() domain.Task {
+	login := t.Author.Slug
+	if login == "" {
+		login = t.Author.Name
+	}
+	return domain.Task{
+		ID:       strconv.Itoa(t.ID),
+		Body:     t.Text,
+		Done:     strings.EqualFold(t.State, "RESOLVED"),
+		Author:   domain.FormatAuthor(login, t.Author.DisplayName),
+		Required: true,
+		Version:  t.Version,
+	}
+}
+
 func limit(n int) int {
 	if n <= 0 || n > 100 {
 		return 50
@@ -343,6 +483,7 @@ type dcPR struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	State       string `json:"state"`
+	Draft       bool   `json:"draft"`
 	Author      struct {
 		User struct {
 			Name         string `json:"name"`
@@ -384,6 +525,7 @@ func (p dcPR) toDomain(repo domain.RepoRef, baseURL string) domain.PullRequest {
 		Body:      p.Description,
 		Author:    author,
 		State:     strings.ToLower(p.State),
+		Draft:     p.Draft,
 		URL:       urlStr,
 		HeadSHA:   p.FromRef.LatestCommit,
 		BaseSHA:   p.ToRef.LatestCommit,

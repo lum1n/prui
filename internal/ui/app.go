@@ -51,7 +51,13 @@ type prItem struct {
 }
 
 func (i prItem) Title() string       { return fmt.Sprintf("#%d  %s", i.pr.Ref.Number, i.pr.Title) }
-func (i prItem) Description() string { return fmt.Sprintf("%s · %s", i.pr.Author, i.pr.State) }
+func (i prItem) Description() string {
+	base := fmt.Sprintf("%s · %s", i.pr.Author, i.pr.State)
+	if badge := formatReviewBadge(i.pr.Reviews); badge != "" {
+		return base + " · " + badge
+	}
+	return base
+}
 func (i prItem) FilterValue() string { return i.Title() + " " + i.Description() }
 
 type fileItem struct {
@@ -171,12 +177,16 @@ type loadedTasksMsg struct {
 type taskToggledMsg struct {
 	err error
 }
+type loadedReviewStatusMsg struct {
+	status domain.ReviewStatus
+	err    error
+}
 type loadedSummaryMsg struct {
-	gen     int
-	text    string
-	err     error
-	kind    string
-	model   string
+	gen   int
+	text  string
+	err   error
+	kind  string
+	model string
 }
 
 // NewModel creates the root TUI model.
@@ -240,8 +250,8 @@ const defaultHelp = `Keys
   x         delete draft on line
   v         toggle range select
   y         yank plain code (cursor line or range)
-  r         submit review
-  p         PR overview (status · tasks · description · summary · conversation)
+  r         submit review (comment / approve / request changes)
+  p         PR overview (status · reviews · tasks · description · summary · conversation)
   C         PR overview → conversation section
   S         AI summarize (config ai.default)
   d         toggle unified/split layout
@@ -254,12 +264,12 @@ const defaultHelp = `Keys
 
 Inline comment: enter save, esc cancel
 Diff thread: ,/. or 1-9 pick target · R reply
-Overview: tab section · j/k · space toggle task · S summarize · R reply · c new
+Overview: reviews · tab section · j/k · space toggle task · S summarize · R reply · c new
 
 Views
   this-file   only the selected path (default)
   all-files   every path in one scroll; file list + section headers track focus
-  overview    status, tasks, description, summary, conversation (key p)`
+  overview    status, reviews, tasks, description, summary, conversation (key p)`
 
 func (m Model) Init() tea.Cmd {
 	if m.opts.PRNumber > 0 {
@@ -272,7 +282,20 @@ func (m Model) loadPRs() tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		prs, err := m.opts.Provider.ListPullRequests(ctx, m.opts.Repo, domain.ListOpts{State: "open"})
-		return loadedPRsMsg{prs: prs, err: err}
+		if err != nil {
+			return loadedPRsMsg{err: err}
+		}
+		// Enrich review badges when the list payload omits them (GitHub).
+		for i := range prs {
+			if prs[i].Reviews.HasReviews() {
+				continue
+			}
+			st, err := m.opts.Provider.GetReviewStatus(ctx, domain.PRRef{Repo: m.opts.Repo, Number: prs[i].Ref.Number})
+			if err == nil {
+				prs[i].Reviews = st
+			}
+		}
+		return loadedPRsMsg{prs: prs}
 	}
 }
 
@@ -392,6 +415,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.summaryGen++
 		m.refreshFileList()
 		m.status = fmt.Sprintf("PR #%d — %s", m.pr.Ref.Number, m.pr.Title)
+		if badge := formatReviewBadge(m.pr.Reviews); badge != "" {
+			m.status += " · " + badge
+		}
 		if len(m.files) == 0 {
 			return m, nil
 		}
@@ -504,6 +530,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.screen == screenOverview {
 			m.renderOverview()
+		}
+		return m, nil
+
+	case loadedReviewStatusMsg:
+		if msg.err == nil && m.pr != nil {
+			m.pr.Reviews = msg.status
+			if m.screen == screenOverview {
+				m.renderOverview()
+			}
 		}
 		return m, nil
 
@@ -636,13 +671,13 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenOverview
 			m.loading = true
 			m.renderOverview()
-			return m, m.loadTasks()
+			return m, tea.Batch(m.loadTasks(), m.loadReviewStatus())
 		case "C":
 			m.overviewSec = sectionConversation
 			m.screen = screenOverview
 			m.loading = true
 			m.renderOverview()
-			return m, m.loadTasks()
+			return m, tea.Batch(m.loadTasks(), m.loadReviewStatus())
 		case "S":
 			if m.pr == nil {
 				m.status = "No PR loaded"
@@ -1062,6 +1097,20 @@ func (m Model) loadTasks() tea.Cmd {
 	}
 }
 
+func (m Model) loadReviewStatus() tea.Cmd {
+	if m.pr == nil {
+		return nil
+	}
+	num := m.pr.Ref.Number
+	repo := m.opts.Repo
+	prov := m.opts.Provider
+	return func() tea.Msg {
+		ctx := context.Background()
+		st, err := prov.GetReviewStatus(ctx, domain.PRRef{Repo: repo, Number: num})
+		return loadedReviewStatusMsg{status: st, err: err}
+	}
+}
+
 func (m Model) toggleSelectedTask() tea.Cmd {
 	if m.taskCursor < 0 || m.taskCursor >= len(m.tasks) || m.pr == nil {
 		return nil
@@ -1429,6 +1478,17 @@ func (m Model) availableActions() []domain.ReviewAction {
 		acts = append(acts, domain.ActionRequestChanges)
 	}
 	return acts
+}
+
+func reviewActionLabel(a domain.ReviewAction) string {
+	switch a {
+	case domain.ActionApprove:
+		return "Approve"
+	case domain.ActionRequestChanges:
+		return "Request changes"
+	default:
+		return "Comment only"
+	}
 }
 
 func (m *Model) cursorRow() (flatRow, bool) {
@@ -2069,7 +2129,7 @@ func (m Model) View() string {
 		var lines []string
 		lines = append(lines, titleStyle.Render("Submit review"), "")
 		if !provider.SupportsRequestChanges(m.opts.Host.Kind) {
-			lines = append(lines, mutedStyle.Render("Note: this host has no request-changes event; comments will still post."), "")
+			lines = append(lines, mutedStyle.Render("Note: this host has no request-changes action; comments will still post."), "")
 		}
 		n := 0
 		if m.session != nil {
@@ -2081,7 +2141,7 @@ func (m Model) View() string {
 			if i == m.submitIdx {
 				prefix = "> "
 			}
-			lines = append(lines, prefix+string(a))
+			lines = append(lines, prefix+reviewActionLabel(a))
 		}
 		lines = append(lines, "", mutedStyle.Render("enter submit · esc cancel"))
 		body = strings.Join(lines, "\n")

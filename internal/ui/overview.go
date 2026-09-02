@@ -30,7 +30,7 @@ func formatPRStatus(pr *domain.PullRequest, tasks []domain.Task) string {
 	if pr == nil {
 		return mutedStyle.Render("no pull request")
 	}
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 8)
 	state := strings.ToLower(pr.State)
 	if state == "" {
 		state = "unknown"
@@ -53,16 +53,77 @@ func formatPRStatus(pr *domain.PullRequest, tasks []domain.Task) string {
 	if openRequired > 0 {
 		parts = append(parts, fmt.Sprintf("%d open task(s)", openRequired))
 	}
+	if badge := formatReviewBadge(pr.Reviews); badge != "" {
+		parts = append(parts, badge)
+	}
 	line := strings.Join(parts, " · ")
 	st := lipgloss.NewStyle().Bold(true)
-	if blocked {
+	if blocked || len(pr.Reviews.ChangeRequesters) > 0 {
 		st = st.Foreground(lipgloss.Color("#f07178"))
 	} else if pr.Draft {
 		st = st.Foreground(lipgloss.Color("#e6c07b"))
+	} else if len(pr.Reviews.Approvers) > 0 {
+		st = st.Foreground(lipgloss.Color("#98c379"))
 	} else {
 		st = st.Foreground(lipgloss.Color("#98c379"))
 	}
 	return st.Render(line)
+}
+
+// formatReviewBadge is a short badge for lists/status: "✓3 ✗1 you✓".
+func formatReviewBadge(rs domain.ReviewStatus) string {
+	if !rs.HasReviews() && rs.ViewerDecision == domain.DecisionNone {
+		return ""
+	}
+	var parts []string
+	if n := len(rs.Approvers); n > 0 {
+		parts = append(parts, fmt.Sprintf("✓%d", n))
+	}
+	if n := len(rs.ChangeRequesters); n > 0 {
+		parts = append(parts, fmt.Sprintf("✗%d", n))
+	}
+	switch rs.ViewerDecision {
+	case domain.DecisionApproved:
+		parts = append(parts, "you✓")
+	case domain.DecisionChangesRequested:
+		parts = append(parts, "you✗")
+	}
+	return strings.Join(parts, " ")
+}
+
+func formatReviewsSection(rs domain.ReviewStatus, width int) string {
+	var b strings.Builder
+	b.WriteString(sectionHeader("Reviews", false))
+	b.WriteByte('\n')
+	if !rs.HasReviews() && rs.ViewerDecision == domain.DecisionNone {
+		b.WriteString(mutedStyle.Render("  No approvals or change requests yet."))
+		b.WriteByte('\n')
+		return b.String()
+	}
+	if rs.ViewerDecision == domain.DecisionApproved {
+		b.WriteString(draftStyle.Render("  You approved this PR."))
+		b.WriteByte('\n')
+	} else if rs.ViewerDecision == domain.DecisionChangesRequested {
+		b.WriteString(errorStyle.Render("  You requested changes."))
+		b.WriteByte('\n')
+	}
+	if len(rs.Approvers) > 0 {
+		line := "  Approved: " + strings.Join(rs.Approvers, ", ")
+		if width > 4 {
+			line = truncate(line, width)
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	if len(rs.ChangeRequesters) > 0 {
+		line := "  Changes requested: " + strings.Join(rs.ChangeRequesters, ", ")
+		if width > 4 {
+			line = truncate(line, width)
+		}
+		b.WriteString(errorStyle.Render(line))
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func formatTasksSection(tasks []domain.Task, cursor int, active bool, width int) string {
@@ -189,6 +250,9 @@ func formatOverview(
 	b.WriteString(mutedStyle.Render("tab section · S summarize · esc back"))
 	b.WriteString("\n\n")
 
+	b.WriteString(formatReviewsSection(prReviews(pr), width))
+	b.WriteByte('\n')
+
 	b.WriteString(formatTasksSection(tasks, taskCursor, sec == sectionTasks, width))
 	b.WriteByte('\n')
 
@@ -220,4 +284,11 @@ func openTaskCount(tasks []domain.Task) int {
 		}
 	}
 	return n
+}
+
+func prReviews(pr *domain.PullRequest) domain.ReviewStatus {
+	if pr == nil {
+		return domain.ReviewStatus{}
+	}
+	return pr.Reviews
 }

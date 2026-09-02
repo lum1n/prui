@@ -8,6 +8,7 @@ Terminal UI for reviewing pull requests on **GitHub** (cloud + Enterprise) and *
 - Syntax-highlighted unified diffs (Chroma; pierre-inspired line annotations)
 - Draft inline / threaded comments, yank plain code, submit reviews
 - Multi-host config (on-prem URLs, optional custom CA)
+- Review status: approvals, change requests, and whether you approved
 - Optional **AI summarize** (`S`) via Claude, GitHub Copilot (cloud/GHE), Codex, or OpenCode
 - Device login: `prui auth login` stores a token so you don’t need to export secrets
 
@@ -203,7 +204,7 @@ prui version
 | `?` | Help |
 | `q` | Back / quit |
 
-Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): `tab` switches Tasks / Description / Summary / Conversation; on Tasks, `space`/`enter` toggles; press `S` to summarize. Yank (`y`): source text only for the cursor line or `v` range.
+Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): shows **Reviews** (who approved / requested changes / your decision), then `tab` through Tasks / Description / Summary / Conversation. Submit (`r`) offers Comment, Approve, and Request changes (GitHub event, Bitbucket Cloud request-changes, Bitbucket DC NEEDS_WORK). Yank (`y`): source text only for the cursor line or `v` range.
 
 ## Architecture
 

@@ -102,6 +102,9 @@ func (c *Client) GetPullRequest(ctx context.Context, ref domain.PRRef) (*domain.
 		return nil, err
 	}
 	pr := mapPR(ref.Repo, p)
+	if st, err := c.GetReviewStatus(ctx, ref); err == nil {
+		pr.Reviews = st
+	}
 	return &pr, nil
 }
 
@@ -384,6 +387,66 @@ func (c *Client) Unapprove(ctx context.Context, ref domain.PRRef) error {
 		}
 	}
 	return fmt.Errorf("no approval from current user to dismiss")
+}
+
+func (c *Client) GetReviewStatus(ctx context.Context, ref domain.PRRef) (domain.ReviewStatus, error) {
+	var st domain.ReviewStatus
+	me, _, err := c.gh.Users.Get(ctx, "")
+	if err == nil {
+		st.ViewerLogin = me.GetLogin()
+	}
+
+	opt := &github.ListOptions{PerPage: 100}
+	type latest struct {
+		state string
+		at    time.Time
+		name  string
+	}
+	byUser := map[string]latest{}
+	for {
+		reviews, resp, err := c.gh.PullRequests.ListReviews(ctx, ref.Repo.Owner, ref.Repo.Name, ref.Number, opt)
+		if err != nil {
+			return st, err
+		}
+		for _, r := range reviews {
+			state := r.GetState()
+			if state == "PENDING" || state == "DISMISSED" {
+				continue
+			}
+			login := r.GetUser().GetLogin()
+			if login == "" {
+				continue
+			}
+			submitted := r.GetSubmittedAt().Time
+			if prev, ok := byUser[login]; ok && !submitted.IsZero() && !prev.at.IsZero() && submitted.Before(prev.at) {
+				continue
+			}
+			byUser[login] = latest{state: state, at: submitted, name: r.GetUser().GetName()}
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+
+	for login, v := range byUser {
+		dec := domain.DecisionNone
+		switch v.state {
+		case "APPROVED":
+			dec = domain.DecisionApproved
+		case "CHANGES_REQUESTED":
+			dec = domain.DecisionChangesRequested
+		default:
+			continue
+		}
+		st.Reviewers = append(st.Reviewers, domain.Reviewer{
+			Login:    login,
+			Name:     v.name,
+			Decision: dec,
+		})
+	}
+	st.Normalize()
+	return st, nil
 }
 
 func mapPR(repo domain.RepoRef, p *github.PullRequest) domain.PullRequest {

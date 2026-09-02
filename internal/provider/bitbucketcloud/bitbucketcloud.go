@@ -123,7 +123,9 @@ func (c *Client) ListPullRequests(ctx context.Context, ref domain.RepoRef, opts 
 		if opts.Author != "" && p.Author.DisplayName != opts.Author && p.Author.Nickname != opts.Author {
 			continue
 		}
-		out = append(out, p.toDomain(ref))
+		pr := p.toDomain(ref)
+		pr.Reviews = reviewStatusFromBBParticipants(p.Participants, c.cred.Username)
+		out = append(out, pr)
 	}
 	return out, nil
 }
@@ -134,6 +136,9 @@ func (c *Client) GetPullRequest(ctx context.Context, ref domain.PRRef) (*domain.
 		return nil, err
 	}
 	pr := p.toDomain(ref.Repo)
+	if st, err := c.GetReviewStatus(ctx, ref); err == nil {
+		pr.Reviews = st
+	}
 	return &pr, nil
 }
 
@@ -259,8 +264,7 @@ func (c *Client) SubmitReview(ctx context.Context, ref domain.PRRef, draft domai
 	case domain.ActionApprove:
 		return c.Approve(ctx, ref)
 	case domain.ActionRequestChanges:
-		// Bitbucket Cloud has no first-class request-changes; comments already posted.
-		return nil
+		return c.RequestChanges(ctx, ref)
 	}
 	return nil
 }
@@ -273,6 +277,46 @@ func (c *Client) Approve(ctx context.Context, ref domain.PRRef) error {
 func (c *Client) Unapprove(ctx context.Context, ref domain.PRRef) error {
 	_, err := httputil.DoJSON(ctx, c.http, http.MethodDelete, c.prURL(ref, "approve"), c.headers(), nil, nil)
 	return err
+}
+
+func (c *Client) RequestChanges(ctx context.Context, ref domain.PRRef) error {
+	_, err := httputil.DoJSON(ctx, c.http, http.MethodPost, c.prURL(ref, "request-changes"), c.headers(), nil, nil)
+	return err
+}
+
+func (c *Client) GetReviewStatus(ctx context.Context, ref domain.PRRef) (domain.ReviewStatus, error) {
+	var p bbPR
+	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, c.prURL(ref, ""), c.headers(), nil, &p); err != nil {
+		return domain.ReviewStatus{}, err
+	}
+	return reviewStatusFromBBParticipants(p.Participants, c.cred.Username), nil
+}
+
+func reviewStatusFromBBParticipants(parts []bbParticipant, viewer string) domain.ReviewStatus {
+	st := domain.ReviewStatus{ViewerLogin: viewer}
+	for _, part := range parts {
+		login := part.User.Nickname
+		if login == "" {
+			login = part.User.UUID
+		}
+		dec := domain.DecisionNone
+		state := strings.ToLower(part.State)
+		switch {
+		case state == "approved" || part.Approved:
+			dec = domain.DecisionApproved
+		case state == "changes_requested":
+			dec = domain.DecisionChangesRequested
+		default:
+			continue
+		}
+		st.Reviewers = append(st.Reviewers, domain.Reviewer{
+			Login:    login,
+			Name:     part.User.DisplayName,
+			Decision: dec,
+		})
+	}
+	st.Normalize()
+	return st
 }
 
 func (c *Client) ListTasks(ctx context.Context, ref domain.PRRef) ([]domain.Task, error) {
@@ -348,8 +392,20 @@ type bbPR struct {
 			Href string `json:"href"`
 		} `json:"html"`
 	} `json:"links"`
-	CreatedOn time.Time `json:"created_on"`
-	UpdatedOn time.Time `json:"updated_on"`
+	CreatedOn    time.Time `json:"created_on"`
+	UpdatedOn    time.Time `json:"updated_on"`
+	Participants []bbParticipant `json:"participants"`
+}
+
+type bbParticipant struct {
+	User struct {
+		DisplayName string `json:"display_name"`
+		Nickname    string `json:"nickname"`
+		UUID        string `json:"uuid"`
+	} `json:"user"`
+	Role     string `json:"role"`
+	Approved bool   `json:"approved"`
+	State    string `json:"state"`
 }
 
 func (p bbPR) toDomain(repo domain.RepoRef) domain.PullRequest {

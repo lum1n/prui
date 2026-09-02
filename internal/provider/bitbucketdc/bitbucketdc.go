@@ -110,7 +110,11 @@ func (c *Client) ListPullRequests(ctx context.Context, ref domain.RepoRef, opts 
 	}
 	out := make([]domain.PullRequest, 0, len(page.Values))
 	for _, p := range page.Values {
-		out = append(out, p.toDomain(ref, c.host.BaseURL))
+		pr := p.toDomain(ref, c.host.BaseURL)
+		if st, err := c.reviewStatusFromPR(p); err == nil {
+			pr.Reviews = st
+		}
+		out = append(out, pr)
 	}
 	return out, nil
 }
@@ -121,6 +125,9 @@ func (c *Client) GetPullRequest(ctx context.Context, ref domain.PRRef) (*domain.
 		return nil, err
 	}
 	pr := p.toDomain(ref.Repo, c.host.BaseURL)
+	if st, err := c.reviewStatusFromPR(p); err == nil {
+		pr.Reviews = st
+	}
 	return &pr, nil
 }
 
@@ -266,6 +273,9 @@ func (c *Client) SubmitReview(ctx context.Context, ref domain.PRRef, draft domai
 	if draft.Action == domain.ActionApprove {
 		return c.Approve(ctx, ref)
 	}
+	if draft.Action == domain.ActionRequestChanges {
+		return c.RequestChanges(ctx, ref)
+	}
 	return nil
 }
 
@@ -329,6 +339,78 @@ func (c *Client) Approve(ctx context.Context, ref domain.PRRef) error {
 func (c *Client) Unapprove(ctx context.Context, ref domain.PRRef) error {
 	_, err := httputil.DoJSON(ctx, c.http, http.MethodDelete, c.prPath(ref)+"/approve", c.headers(), nil, nil)
 	return err
+}
+
+func (c *Client) RequestChanges(ctx context.Context, ref domain.PRRef) error {
+	slug, err := c.viewerSlug(ctx)
+	if err != nil {
+		return err
+	}
+	body := map[string]any{"status": "NEEDS_WORK"}
+	_, err = httputil.DoJSON(ctx, c.http, http.MethodPut, c.prPath(ref)+"/participants/"+url.PathEscape(slug), c.headers(), body, nil)
+	return err
+}
+
+func (c *Client) GetReviewStatus(ctx context.Context, ref domain.PRRef) (domain.ReviewStatus, error) {
+	var p dcPR
+	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, c.prPath(ref), c.headers(), nil, &p); err != nil {
+		return domain.ReviewStatus{}, err
+	}
+	return c.reviewStatusFromPR(p)
+}
+
+func (c *Client) reviewStatusFromPR(p dcPR) (domain.ReviewStatus, error) {
+	st := domain.ReviewStatus{}
+	if c.cred.Username != "" {
+		st.ViewerLogin = c.cred.Username
+	}
+	for _, r := range p.Reviewers {
+		login := r.User.Slug
+		if login == "" {
+			login = r.User.Name
+		}
+		dec := domain.DecisionNone
+		switch strings.ToUpper(r.Status) {
+		case "APPROVED":
+			dec = domain.DecisionApproved
+		case "NEEDS_WORK":
+			dec = domain.DecisionChangesRequested
+		default:
+			if r.Approved {
+				dec = domain.DecisionApproved
+			} else {
+				continue
+			}
+		}
+		st.Reviewers = append(st.Reviewers, domain.Reviewer{
+			Login:    login,
+			Name:     r.User.DisplayName,
+			Decision: dec,
+		})
+	}
+	st.Normalize()
+	return st, nil
+}
+
+func (c *Client) viewerSlug(ctx context.Context) (string, error) {
+	if c.cred.Username != "" {
+		return c.cred.Username, nil
+	}
+	var me struct {
+		Slug string `json:"slug"`
+		Name string `json:"name"`
+	}
+	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, c.api+"/users/"+url.PathEscape("~"), c.headers(), nil, &me); err != nil {
+		// Fallback: /application-properties won't help; try users?filter
+		return "", fmt.Errorf("could not resolve current user slug (set hosts[].username): %w", err)
+	}
+	if me.Slug != "" {
+		return me.Slug, nil
+	}
+	if me.Name != "" {
+		return me.Name, nil
+	}
+	return "", fmt.Errorf("could not resolve current user slug (set hosts[].username)")
 }
 
 func (c *Client) ListTasks(ctx context.Context, ref domain.PRRef) ([]domain.Task, error) {
@@ -486,12 +568,13 @@ type dcPR struct {
 	Draft       bool   `json:"draft"`
 	Author      struct {
 		User struct {
-			Name         string `json:"name"`
-			DisplayName  string `json:"displayName"`
-			Slug         string `json:"slug"`
+			Name        string `json:"name"`
+			DisplayName string `json:"displayName"`
+			Slug        string `json:"slug"`
 		} `json:"user"`
 	} `json:"author"`
-	FromRef struct {
+	Reviewers []dcReviewer `json:"reviewers"`
+	FromRef   struct {
 		LatestCommit string `json:"latestCommit"`
 	} `json:"fromRef"`
 	ToRef struct {
@@ -504,6 +587,17 @@ type dcPR struct {
 	} `json:"links"`
 	CreatedDate int64 `json:"createdDate"`
 	UpdatedDate int64 `json:"updatedDate"`
+}
+
+type dcReviewer struct {
+	User struct {
+		Name        string `json:"name"`
+		DisplayName string `json:"displayName"`
+		Slug        string `json:"slug"`
+	} `json:"user"`
+	Role     string `json:"role"`
+	Approved bool   `json:"approved"`
+	Status   string `json:"status"`
 }
 
 func (p dcPR) toDomain(repo domain.RepoRef, baseURL string) domain.PullRequest {

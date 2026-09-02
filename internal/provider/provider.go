@@ -20,9 +20,16 @@ type Host interface {
 	SubmitReview(ctx context.Context, ref domain.PRRef, draft domain.DraftReview) error
 	Approve(ctx context.Context, ref domain.PRRef) error
 	Unapprove(ctx context.Context, ref domain.PRRef) error
+	// GetReviewStatus returns approvals / change-requests and the viewer's decision.
+	GetReviewStatus(ctx context.Context, ref domain.PRRef) (domain.ReviewStatus, error)
 }
 
-// SupportsRequestChanges reports whether the host has a first-class request-changes review event.
+// SupportsRequestChanges reports whether the host has a first-class request-changes action.
 func SupportsRequestChanges(kind domain.HostKind) bool {
-	return kind == domain.HostGitHub
+	switch kind {
+	case domain.HostGitHub, domain.HostBitbucketDC, domain.HostBitbucketCloud:
+		return true
+	default:
+		return false
+	}
 }

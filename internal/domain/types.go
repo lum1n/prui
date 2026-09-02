@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // HostKind identifies a forge API family.
 type HostKind string
@@ -87,6 +90,62 @@ type PullRequest struct {
 	BaseSHA   string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	Reviews   ReviewStatus // approvals / change requests (may be empty until loaded)
+}
+
+// ReviewDecision is a reviewer's latest verdict on a PR.
+type ReviewDecision string
+
+const (
+	DecisionNone             ReviewDecision = ""
+	DecisionApproved         ReviewDecision = "approved"
+	DecisionChangesRequested ReviewDecision = "changes_requested"
+)
+
+// Reviewer is one person's latest review decision.
+type Reviewer struct {
+	Login    string
+	Name     string
+	Decision ReviewDecision
+}
+
+// ReviewStatus summarizes approvals and change requests.
+type ReviewStatus struct {
+	Reviewers        []Reviewer
+	ViewerLogin      string
+	ViewerDecision   ReviewDecision
+	Approvers        []string // logins (derived)
+	ChangeRequesters []string // logins (derived)
+}
+
+// HasReviews reports whether any approval or change-request is known.
+func (s ReviewStatus) HasReviews() bool {
+	return len(s.Approvers) > 0 || len(s.ChangeRequesters) > 0 || s.ViewerDecision != DecisionNone
+}
+
+// Normalize fills Approvers / ChangeRequesters from Reviewers and sets ViewerDecision.
+func (s *ReviewStatus) Normalize() {
+	s.Approvers = nil
+	s.ChangeRequesters = nil
+	s.ViewerDecision = DecisionNone
+	for _, r := range s.Reviewers {
+		switch r.Decision {
+		case DecisionApproved:
+			s.Approvers = append(s.Approvers, displayLogin(r))
+		case DecisionChangesRequested:
+			s.ChangeRequesters = append(s.ChangeRequesters, displayLogin(r))
+		}
+		if s.ViewerLogin != "" && strings.EqualFold(r.Login, s.ViewerLogin) {
+			s.ViewerDecision = r.Decision
+		}
+	}
+}
+
+func displayLogin(r Reviewer) string {
+	if r.Login != "" {
+		return r.Login
+	}
+	return r.Name
 }
 
 // Task is a required or optional PR checklist/blocker item.

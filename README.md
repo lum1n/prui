@@ -97,7 +97,9 @@ prui pr list owner/repo
 | `j`/`k` | Move |
 | `Tab` | Files ↔ diff |
 | `Enter` | Open PR / load file |
-| `c` | Comment on line |
+| `c` | New comment on line |
+| `e` | Edit draft on line |
+| `x` | Delete draft on line |
 | `v` | Range select |
 | `r` | Submit review |
 | `[`/`]` | Prev/next hunk |
@@ -105,7 +107,7 @@ prui pr list owner/repo
 | `?` | Help |
 | `q` | Back / quit |
 
-Comment editor: `ctrl+s` to save draft, `esc` to cancel.
+Comment editor: `enter`/`ctrl+s` save, `esc` cancel. `e`/`x` edit or delete the draft on the cursor line.
 
 ## Architecture
 

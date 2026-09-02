@@ -109,6 +109,7 @@ type Model struct {
 	showAll    bool // all files in one scrollable view
 
 	commenting    bool
+	editingID     string // non-empty while editing an existing draft
 	activePath    string // last requested / shown file path
 	leftWidth     int
 	rightWidth    int
@@ -194,7 +195,9 @@ const defaultHelp = `Keys
   j/k       move
   tab       switch pane
   enter     open PR / load file
-  c         comment on line (inline)
+  c         new comment on line
+  e         edit draft on line
+  x         delete draft on line
   v         toggle range select
   r         submit review
   p         PR description (markdown)
@@ -205,7 +208,7 @@ const defaultHelp = `Keys
   ?         help
   q/esc     back / quit
 
-Inline comment: type on the selected line, enter to save, esc to cancel
+Inline comment: enter save, esc cancel
 
 Views
   this-file   only the selected path (default)
@@ -370,6 +373,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.rangeStart = -1
 		m.commenting = false
+		m.editingID = ""
 		m.layout()
 		m.renderDiff()
 		return m, nil
@@ -558,13 +562,25 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Select a commentable line"
 				return m, nil
 			}
-			m.pane = paneDiff
-			m.comment.SetValue("")
-			m.comment.Focus()
-			m.commenting = true
-			m.layout()
-			m.status = "Commenting — enter save, esc cancel"
-			return m, textarea.Blink
+			return m, m.beginComment("")
+		case "e":
+			d := m.draftOnCursor()
+			if d == nil {
+				m.status = "No draft on this line"
+				return m, nil
+			}
+			return m, m.beginComment(d.ID)
+		case "x":
+			d := m.draftOnCursor()
+			if d == nil {
+				m.status = "No draft on this line"
+				return m, nil
+			}
+			_ = m.session.RemoveComment(d.ID)
+			m.refreshFileList()
+			m.status = "Draft deleted"
+			m.renderDiff()
+			return m, nil
 		case "v":
 			if m.rangeStart < 0 {
 				m.rangeStart = m.cursorLine
@@ -662,8 +678,53 @@ func (m *Model) selectFile(path string) tea.Cmd {
 	m.loading = true
 	m.errMsg = ""
 	m.commenting = false
+	m.editingID = ""
 	m.status = "Loading " + path + "…"
 	return m.loadDiff(path)
+}
+
+// draftOnCursor returns the last draft anchored on the cursor line, if any.
+func (m *Model) draftOnCursor() *domain.DraftComment {
+	if m.session == nil {
+		return nil
+	}
+	row, ok := m.cursorRow()
+	if !ok || row.header || row.fd == nil || row.line < 0 || row.line >= len(row.fd.Lines) {
+		return nil
+	}
+	ln := row.fd.Lines[row.line]
+	var found *domain.DraftComment
+	for i := range m.session.Draft.Comments {
+		d := &m.session.Draft.Comments[i]
+		if d.Path != row.path || d.Anchor == nil {
+			continue
+		}
+		if d.Anchor.Line == ln.Anchor.Line && (d.Anchor.Side == "" || d.Anchor.Side == ln.Anchor.Side) {
+			found = d
+		}
+	}
+	return found
+}
+
+func (m *Model) beginComment(editID string) tea.Cmd {
+	m.pane = paneDiff
+	m.editingID = editID
+	if editID != "" && m.session != nil {
+		for _, d := range m.session.Draft.Comments {
+			if d.ID == editID {
+				m.comment.SetValue(d.Body)
+				break
+			}
+		}
+		m.status = "Editing draft — enter save, esc cancel"
+	} else {
+		m.comment.SetValue("")
+		m.status = "Commenting — enter save, esc cancel"
+	}
+	m.comment.Focus()
+	m.commenting = true
+	m.layout()
+	return textarea.Blink
 }
 
 func (m Model) updateInlineComment(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -672,49 +733,46 @@ func (m Model) updateInlineComment(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc":
 			m.commenting = false
+			m.editingID = ""
 			m.comment.Blur()
 			m.layout()
 			m.status = "Comment cancelled"
 			return m, nil
-		case "enter":
-			// Single-line save; shift+enter / ctrl+j not needed for drafts.
+		case "enter", "ctrl+s":
 			body := strings.TrimSpace(m.comment.Value())
 			if body == "" {
 				m.status = "Empty comment"
 				return m, nil
 			}
-			anchor := m.selectedAnchor()
-			_ = m.session.AddComment(domain.DraftComment{
-				Body:   body,
-				Path:   m.fileDiff.Path,
-				Anchor: anchor,
-			})
-			m.refreshFileList()
-			m.rangeStart = -1
-			m.commenting = false
-			m.comment.Blur()
-			m.layout()
-			m.status = "Draft comment added"
-			m.renderDiff()
-			return m, nil
-		case "ctrl+s":
-			body := strings.TrimSpace(m.comment.Value())
-			if body == "" {
-				m.status = "Empty comment"
+			if m.session == nil {
+				m.status = "No review session"
 				return m, nil
 			}
-			anchor := m.selectedAnchor()
-			_ = m.session.AddComment(domain.DraftComment{
-				Body:   body,
-				Path:   m.fileDiff.Path,
-				Anchor: anchor,
-			})
+			path := ""
+			if m.fileDiff != nil {
+				path = m.fileDiff.Path
+			}
+			if m.editingID != "" {
+				if err := m.session.UpdateComment(m.editingID, body); err != nil {
+					m.status = err.Error()
+					return m, nil
+				}
+				m.status = "Draft updated"
+			} else {
+				anchor := m.selectedAnchor()
+				_ = m.session.AddComment(domain.DraftComment{
+					Body:   body,
+					Path:   path,
+					Anchor: anchor,
+				})
+				m.status = "Draft comment added"
+			}
 			m.refreshFileList()
 			m.rangeStart = -1
 			m.commenting = false
+			m.editingID = ""
 			m.comment.Blur()
 			m.layout()
-			m.status = "Draft comment added"
 			m.renderDiff()
 			return m, nil
 		}
@@ -1116,8 +1174,12 @@ func (m Model) View() string {
 			if a := m.selectedAnchor(); a != nil {
 				anchorHint = fmt.Sprintf(" line %d", a.Line)
 			}
+			label := "✎ comment" + anchorHint + "  (enter save · esc cancel)"
+			if m.editingID != "" {
+				label = "✎ edit draft" + anchorHint + "  (enter save · esc cancel)"
+			}
 			box := lipgloss.JoinVertical(lipgloss.Left,
-				draftStyle.Render("✎ comment"+anchorHint+"  (enter save · esc cancel)"),
+				draftStyle.Render(label),
 				m.comment.View(),
 			)
 			rightInner = lipgloss.JoinVertical(lipgloss.Left, rightInner, box)

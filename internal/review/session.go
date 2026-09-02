@@ -99,6 +99,17 @@ func (s *Session) AddComment(c domain.DraftComment) error {
 	return Save(s)
 }
 
+// UpdateComment replaces the body of a draft by id.
+func (s *Session) UpdateComment(id, body string) error {
+	for i := range s.Draft.Comments {
+		if s.Draft.Comments[i].ID == id {
+			s.Draft.Comments[i].Body = body
+			return Save(s)
+		}
+	}
+	return fmt.Errorf("draft comment %s not found", id)
+}
+
 // RemoveComment deletes a draft by id.
 func (s *Session) RemoveComment(id string) error {
 	out := s.Draft.Comments[:0]

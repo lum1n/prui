@@ -87,6 +87,17 @@ func configureList(l *list.Model, title, singular, plural string) {
 	l.SetStatusBarItemName(singular, plural)
 }
 
+func (m *Model) syncPRListItemName() {
+	switch m.prTab {
+	case tabDrafts:
+		m.prList.SetStatusBarItemName("draft PR", "draft PRs")
+	case tabMerged:
+		m.prList.SetStatusBarItemName("merged PR", "merged PRs")
+	default:
+		m.prList.SetStatusBarItemName("open PR", "open PRs")
+	}
+}
+
 func newPRDelegate() prDelegate {
 	return prDelegate{styles: dimItemStyles()}
 }

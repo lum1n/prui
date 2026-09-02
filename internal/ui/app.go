@@ -361,7 +361,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = prItem{pr: p}
 		}
 		m.prList.SetItems(items)
-		m.status = fmt.Sprintf("%d %s", len(msg.prs), m.prTab.statusNoun())
+		m.syncPRListItemName()
+		m.status = ""
 		return m, nil
 
 	case loadedReviewMsg:
@@ -391,6 +392,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.summaryErr = ""
 		m.summarizing = false
 		m.summaryGen++
+		m.layout()
 		m.refreshFileList()
 		m.status = fmt.Sprintf("PR #%d — %s", m.pr.Ref.Number, m.pr.Title)
 		if m.pr.ViewOnly() {
@@ -594,7 +596,7 @@ func (m Model) updatePRList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prTab = m.prTab.next()
 			m.loading = true
 			m.errMsg = ""
-			m.status = "Loading " + m.prTab.statusNoun() + "…"
+			m.status = ""
 			return m, m.loadPRs()
 		case "shift+tab", "left", "h":
 			if filtering {
@@ -603,7 +605,7 @@ func (m Model) updatePRList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prTab = m.prTab.prev()
 			m.loading = true
 			m.errMsg = ""
-			m.status = "Loading " + m.prTab.statusNoun() + "…"
+			m.status = ""
 			return m, m.loadPRs()
 		case "1":
 			if filtering {
@@ -659,7 +661,7 @@ func (m Model) switchPRTab(tab prListTab) (tea.Model, tea.Cmd) {
 	m.prTab = tab
 	m.loading = true
 	m.errMsg = ""
-	m.status = "Loading " + m.prTab.statusNoun() + "…"
+	m.status = ""
 	return m, m.loadPRs()
 }
 
@@ -687,6 +689,8 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenPRList
 			m.pr = nil
 			m.fileDiff = nil
+			m.status = ""
+			m.layout()
 			return m, nil
 		case "ctrl+c":
 			return m, tea.Quit
@@ -1913,7 +1917,7 @@ func (m *Model) layout() {
 	titleH := 1
 	statusH := 1
 	helpH := 0
-	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenOverview || m.screen == screenPRList {
+	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenOverview {
 		helpH = 1
 	}
 	contentH := m.height - titleH - statusH - helpH
@@ -2259,20 +2263,17 @@ func (m Model) View() string {
 
 	helpH := 0
 	var helpBar string
-	switch m.screen {
-	case screenReview, screenSubmit, screenOverview:
+	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenOverview {
 		helpH = 1
 		helpBar = helpBarStyle.Width(m.width).Render(truncate(m.reviewHelpLine(), m.width))
-	case screenPRList:
-		helpH = 1
-		helpBar = helpBarStyle.Width(m.width).Render(truncate(prListHelpLine(), m.width))
 	}
 
 	contentH := m.height - 2 - helpH // title + status (+ help)
 	if contentH < 1 {
 		contentH = 1
 	}
-	body = lipgloss.NewStyle().Width(m.width).Height(contentH).MaxHeight(contentH).Render(body)
+	// Do not set Width here — it reflows JoinHorizontal panels and destroys columns.
+	body = lipgloss.NewStyle().Height(contentH).MaxHeight(contentH).Render(body)
 	if helpH > 0 {
 		return lipgloss.JoinVertical(lipgloss.Left, title, body, helpBar, statusBar)
 	}
@@ -2342,7 +2343,7 @@ var (
 	mutedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
 	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#e06c75"))
 	statusStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#abb2bf")).Background(lipgloss.Color("#1a1d23"))
-	helpBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Background(lipgloss.Color("#14161c"))
+	helpBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
 	panel        = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#2e3440"))
 	focusedPanel = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#c8a35a"))
 	draftStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#c8a35a"))

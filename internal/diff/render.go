@@ -40,10 +40,10 @@ func DarkTheme() Theme {
 		HunkFg:       lipgloss.Color("#7f8490"),
 		HunkBg:       lipgloss.Color("#1e222a"),
 		AddFg:        lipgloss.Color("#98c379"),
-		AddBg:        lipgloss.Color("#1b2a1f"),
+		AddBg:        lipgloss.Color("#1e3a28"),
 		AddBar:       lipgloss.Color("#3fa866"),
 		DelFg:        lipgloss.Color("#e06c75"),
-		DelBg:        lipgloss.Color("#2b1d1f"),
+		DelBg:        lipgloss.Color("#3a1e22"),
 		DelBar:       lipgloss.Color("#c44c55"),
 		SelectedBg:   lipgloss.Color("#2c313a"),
 		SelectedBar:  lipgloss.Color("#e5c07b"),
@@ -109,6 +109,12 @@ func ThemeFor(name string) Theme {
 
 // HighlightLine returns a lipgloss-styled string for one source line.
 func (h *Highlighter) HighlightLine(path, line string) string {
+	return h.HighlightLineBG(path, line, "")
+}
+
+// HighlightLineBG highlights a line and paints every token with bg so nested
+// ANSI resets do not wipe the add/remove row tint.
+func (h *Highlighter) HighlightLineBG(path, line string, bg lipgloss.Color) string {
 	if line == "" {
 		return ""
 	}
@@ -119,19 +125,23 @@ func (h *Highlighter) HighlightLine(path, line string) string {
 	lexer = chroma.Coalesce(lexer)
 	it, err := lexer.Tokenise(nil, line+"\n")
 	if err != nil {
-		return line
+		st := lipgloss.NewStyle()
+		if bg != "" {
+			st = st.Background(bg)
+		}
+		return st.Render(line)
 	}
 	var b strings.Builder
 	for _, tok := range it.Tokens() {
 		if tok.Value == "\n" {
 			continue
 		}
-		b.WriteString(h.lipglossFor(tok.Type).Render(tok.Value))
+		b.WriteString(h.lipglossFor(tok.Type, bg).Render(tok.Value))
 	}
 	return b.String()
 }
 
-func (h *Highlighter) lipglossFor(t chroma.TokenType) lipgloss.Style {
+func (h *Highlighter) lipglossFor(t chroma.TokenType, bg lipgloss.Color) lipgloss.Style {
 	entry := h.style.Get(t)
 	st := lipgloss.NewStyle()
 	if entry.Bold == chroma.Yes {
@@ -142,6 +152,9 @@ func (h *Highlighter) lipglossFor(t chroma.TokenType) lipgloss.Style {
 	}
 	if entry.Colour.IsSet() {
 		st = st.Foreground(lipgloss.Color(entry.Colour.String()))
+	}
+	if bg != "" {
+		st = st.Background(bg)
 	}
 	return st
 }
@@ -228,50 +241,72 @@ func paintHunk(text string, th Theme, width int, selected bool) string {
 
 func paintUnified(h *Highlighter, path string, line domain.DiffLine, th Theme, width int, selected bool) string {
 	const gutterW = 5
-	gutterStyle := lipgloss.NewStyle().Foreground(th.GutterFg).Width(gutterW).Align(lipgloss.Right)
-
-	oldG := gutterStyle.Render(gutterNum(line.OldNumber))
-	newG := gutterStyle.Render(gutterNum(line.NewNumber))
 
 	bar := "│"
-	barStyle := lipgloss.NewStyle().Width(1).Foreground(th.SepFg)
+	barCol := th.SepFg
 	var rowBg lipgloss.Color
 	sign := " "
+	numFg := th.GutterFg
 
 	switch line.Kind {
 	case domain.LineAdded:
 		bar = "┃"
-		barStyle = lipgloss.NewStyle().Width(1).Foreground(th.AddBar)
+		barCol = th.AddBar
 		rowBg = th.AddBg
 		sign = "+"
-		newG = lipgloss.NewStyle().Foreground(th.AddFg).Width(gutterW).Align(lipgloss.Right).Render(gutterNum(line.NewNumber))
-		oldG = gutterStyle.Render(" ")
+		numFg = th.AddFg
 	case domain.LineRemoved:
 		bar = "┃"
-		barStyle = lipgloss.NewStyle().Width(1).Foreground(th.DelBar)
+		barCol = th.DelBar
 		rowBg = th.DelBg
 		sign = "−"
-		oldG = lipgloss.NewStyle().Foreground(th.DelFg).Width(gutterW).Align(lipgloss.Right).Render(gutterNum(line.OldNumber))
-		newG = gutterStyle.Render(" ")
+		numFg = th.DelFg
 	}
 
 	if selected {
 		bar = "▌"
-		barStyle = lipgloss.NewStyle().Width(1).Foreground(th.SelectedBar)
-		rowBg = th.SelectedBg
+		barCol = th.SelectedBar
+		if rowBg == "" {
+			rowBg = th.SelectedBg
+		}
+	}
+
+	withBG := func(st lipgloss.Style) lipgloss.Style {
+		if rowBg != "" {
+			return st.Background(rowBg)
+		}
+		return st
+	}
+
+	gutterStyle := withBG(lipgloss.NewStyle().Foreground(th.GutterFg).Width(gutterW).Align(lipgloss.Right))
+	numStyle := withBG(lipgloss.NewStyle().Foreground(numFg).Width(gutterW).Align(lipgloss.Right))
+
+	var oldG, newG string
+	switch line.Kind {
+	case domain.LineAdded:
+		oldG = gutterStyle.Render(" ")
+		newG = numStyle.Render(gutterNum(line.NewNumber))
+	case domain.LineRemoved:
+		oldG = numStyle.Render(gutterNum(line.OldNumber))
+		newG = gutterStyle.Render(" ")
+	default:
+		oldG = gutterStyle.Render(gutterNum(line.OldNumber))
+		newG = gutterStyle.Render(gutterNum(line.NewNumber))
 	}
 
 	code := line.Text
 	if h != nil {
-		code = h.HighlightLine(path, line.Text)
+		code = h.HighlightLineBG(path, line.Text, rowBg)
+	} else if rowBg != "" {
+		code = lipgloss.NewStyle().Background(rowBg).Render(code)
 	}
 
-	signSt := lipgloss.NewStyle().Width(1).Foreground(th.GutterFg)
+	signSt := withBG(lipgloss.NewStyle().Width(1).Foreground(th.GutterFg))
 	switch line.Kind {
 	case domain.LineAdded:
-		signSt = lipgloss.NewStyle().Width(1).Foreground(th.AddFg)
+		signSt = withBG(lipgloss.NewStyle().Width(1).Foreground(th.AddFg))
 	case domain.LineRemoved:
-		signSt = lipgloss.NewStyle().Width(1).Foreground(th.DelFg)
+		signSt = withBG(lipgloss.NewStyle().Width(1).Foreground(th.DelFg))
 	}
 
 	chromeW := gutterW + 1 + gutterW + 1 + 1 + 1 + 1
@@ -279,10 +314,13 @@ func paintUnified(h *Highlighter, path string, line domain.DiffLine, th Theme, w
 	if codeW < 8 {
 		codeW = 8
 	}
-	code = lipgloss.NewStyle().MaxWidth(codeW).Render(code)
+	code = withBG(lipgloss.NewStyle().Width(codeW).MaxWidth(codeW)).Render(code)
 
-	row := oldG + lipgloss.NewStyle().Foreground(th.SepFg).Render("│") + newG +
-		barStyle.Render(bar) + signSt.Render(sign) + " " + code
+	sep := withBG(lipgloss.NewStyle().Foreground(th.SepFg)).Render("│")
+	barS := withBG(lipgloss.NewStyle().Width(1).Foreground(barCol)).Render(bar)
+	gap := withBG(lipgloss.NewStyle()).Render(" ")
+
+	row := oldG + sep + newG + barS + signSt.Render(sign) + gap + code
 
 	st := lipgloss.NewStyle().Width(width).MaxWidth(width)
 	if rowBg != "" {
@@ -299,41 +337,56 @@ func paintSplit(h *Highlighter, path string, line domain.DiffLine, th Theme, wid
 	leftW := half
 	rightW := width - half
 
-	code := line.Text
-	if h != nil {
-		code = h.HighlightLine(path, line.Text)
-	}
-
 	empty := func(w int) string {
 		return lipgloss.NewStyle().Width(w).MaxWidth(w).Render("")
 	}
-	side := func(num int, kind domain.LineType, content string, w int) string {
-		g := lipgloss.NewStyle().Foreground(th.GutterFg).Width(4).Align(lipgloss.Right).Render(gutterNum(num))
+	side := func(num int, kind domain.LineType, raw string, w int) string {
 		barCol := th.SepFg
 		var bg lipgloss.Color
 		sign := " "
+		numFg := th.GutterFg
 		switch kind {
 		case domain.LineAdded:
 			barCol = th.AddBar
 			bg = th.AddBg
 			sign = "+"
+			numFg = th.AddFg
 		case domain.LineRemoved:
 			barCol = th.DelBar
 			bg = th.DelBg
 			sign = "−"
+			numFg = th.DelFg
 		}
 		if selected {
 			barCol = th.SelectedBar
-			bg = th.SelectedBg
+			if bg == "" {
+				bg = th.SelectedBg
+			}
 		}
-		bar := lipgloss.NewStyle().Foreground(barCol).Render("┃")
-		signS := lipgloss.NewStyle().Foreground(barCol).Render(sign)
+		withBG := func(st lipgloss.Style) lipgloss.Style {
+			if bg != "" {
+				return st.Background(bg)
+			}
+			return st
+		}
+		g := withBG(lipgloss.NewStyle().Foreground(numFg).Width(4).Align(lipgloss.Right)).Render(gutterNum(num))
+		bar := withBG(lipgloss.NewStyle().Foreground(barCol)).Render("┃")
+		signS := withBG(lipgloss.NewStyle().Foreground(barCol)).Render(sign)
+		gap := withBG(lipgloss.NewStyle()).Render(" ")
 		innerW := w - 4 - 1 - 1 - 1
 		if innerW < 4 {
 			innerW = 4
 		}
-		body := lipgloss.NewStyle().MaxWidth(innerW).Render(content)
-		row := g + bar + signS + " " + body
+		var body string
+		if h != nil {
+			body = h.HighlightLineBG(path, raw, bg)
+		} else if bg != "" {
+			body = lipgloss.NewStyle().Background(bg).Render(raw)
+		} else {
+			body = raw
+		}
+		body = withBG(lipgloss.NewStyle().Width(innerW).MaxWidth(innerW)).Render(body)
+		row := g + bar + signS + gap + body
 		st := lipgloss.NewStyle().Width(w).MaxWidth(w)
 		if bg != "" {
 			st = st.Background(bg)
@@ -344,14 +397,14 @@ func paintSplit(h *Highlighter, path string, line domain.DiffLine, th Theme, wid
 	var left, right string
 	switch line.Kind {
 	case domain.LineRemoved:
-		left = side(line.OldNumber, domain.LineRemoved, code, leftW)
+		left = side(line.OldNumber, domain.LineRemoved, line.Text, leftW)
 		right = empty(rightW)
 	case domain.LineAdded:
 		left = empty(leftW)
-		right = side(line.NewNumber, domain.LineAdded, code, rightW)
+		right = side(line.NewNumber, domain.LineAdded, line.Text, rightW)
 	default:
-		left = side(line.OldNumber, domain.LineContext, code, leftW)
-		right = side(line.NewNumber, domain.LineContext, code, rightW)
+		left = side(line.OldNumber, domain.LineContext, line.Text, leftW)
+		right = side(line.NewNumber, domain.LineContext, line.Text, rightW)
 	}
 	return left + right
 }

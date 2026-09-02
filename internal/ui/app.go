@@ -50,15 +50,14 @@ type prItem struct {
 	pr domain.PullRequest
 }
 
-func (i prItem) Title() string       { return fmt.Sprintf("#%d  %s", i.pr.Ref.Number, i.pr.Title) }
+func (i prItem) Title() string { return fmt.Sprintf("#%d  %s", i.pr.Ref.Number, i.pr.Title) }
 func (i prItem) Description() string {
-	base := fmt.Sprintf("%s · %s", i.pr.Author, i.pr.State)
-	if badge := formatReviewBadge(i.pr.Reviews); badge != "" {
-		return base + " · " + badge
-	}
-	return base
+	// Used only as a plain fallback; prDelegate renders badges with color.
+	return fmt.Sprintf("%s · %s", i.pr.Author, i.pr.State)
 }
-func (i prItem) FilterValue() string { return i.Title() + " " + i.Description() }
+func (i prItem) FilterValue() string {
+	return fmt.Sprintf("#%d %s %s %s", i.pr.Ref.Number, i.pr.Title, i.pr.Author, i.pr.State)
+}
 
 type fileItem struct {
 	file     domain.FileChange
@@ -67,29 +66,6 @@ type fileItem struct {
 	maxTitle int // list content width for path fitting; 0 = no fit
 }
 
-func (i fileItem) Title() string {
-	mark := " "
-	switch i.file.Status {
-	case domain.FileAdded:
-		mark = "+"
-	case domain.FileRemoved:
-		mark = "-"
-	case domain.FileRenamed:
-		mark = "→"
-	}
-	extra := ""
-	if i.drafts > 0 || i.comments > 0 {
-		extra = fmt.Sprintf("  [%d/%d]", i.drafts, i.comments)
-	}
-	prefix := mark + " "
-	path := i.file.Path
-	if i.maxTitle > 0 {
-		budget := i.maxTitle - len(prefix) - len(extra)
-		path = fitPathKeepBase(path, budget)
-	}
-	return prefix + path + extra
-}
-func (i fileItem) Description() string { return string(i.file.Status) }
 func (i fileItem) FilterValue() string { return i.file.Path }
 
 type Model struct {
@@ -191,16 +167,11 @@ type loadedSummaryMsg struct {
 
 // NewModel creates the root TUI model.
 func NewModel(opts Options) Model {
-	delegate := list.NewDefaultDelegate()
-	prList := list.New(nil, delegate, 0, 0)
-	prList.Title = "Pull requests"
-	prList.SetShowStatusBar(true)
-	prList.SetFilteringEnabled(true)
+	prList := list.New(nil, newPRDelegate(), 0, 0)
+	configureList(&prList, "Pull requests", "PR", "PRs")
 
-	fileList := list.New(nil, delegate, 0, 0)
-	fileList.Title = "Files"
-	fileList.SetShowHelp(false)
-	fileList.SetFilteringEnabled(true)
+	fileList := list.New(nil, newFileDelegate(), 0, 0)
+	configureList(&fileList, "Files", "file", "files")
 
 	ta := textarea.New()
 	ta.Placeholder = "Comment on this line… (enter save, esc cancel)"
@@ -1846,7 +1817,12 @@ func (m *Model) layout() {
 		contentH = 3
 	}
 	m.contentHeight = contentH
-	m.prList.SetSize(m.width, contentH)
+	// Reserve one row for the bottom "N items" footer outside the list.
+	prH := contentH - 1
+	if prH < 3 {
+		prH = 3
+	}
+	m.prList.SetSize(m.width, prH)
 
 	leftW := m.width / 3
 	if leftW < 24 {
@@ -1871,7 +1847,11 @@ func (m *Model) layout() {
 		diffH = 3
 	}
 
-	m.fileList.SetSize(leftW-2, contentH-2) // account for panel border later
+	fileH := contentH - 2 - 1 // panel border + bottom item-count footer
+	if fileH < 3 {
+		fileH = 3
+	}
+	m.fileList.SetSize(leftW-2, fileH)
 	if len(m.files) > 0 {
 		m.refreshFileList()
 	}
@@ -2090,9 +2070,9 @@ func (m Model) View() string {
 	var body string
 	switch m.screen {
 	case screenPRList:
-		body = m.prList.View()
+		body = listViewWithFooter(m.prList)
 	case screenReview:
-		leftInner := m.fileList.View()
+		leftInner := listViewWithFooter(m.fileList)
 		rightInner := m.diffVP.View()
 		if m.commenting {
 			labelW := m.rightWidth - 4
@@ -2235,14 +2215,14 @@ func (m Model) reviewHelpLine() string {
 }
 
 var (
-	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#e6c07b"))
-	mutedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#7a7a7a"))
-	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#f07178"))
-	statusStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#abb2bf")).Background(lipgloss.Color("#1e1e2e"))
-	helpBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#7a7a7a")).Background(lipgloss.Color("#16161e"))
-	panel        = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#333344"))
-	focusedPanel = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#e6c07b"))
-	draftStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#e6c07b"))
+	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#c8a35a"))
+	mutedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#e06c75"))
+	statusStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#abb2bf")).Background(lipgloss.Color("#1a1d23"))
+	helpBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Background(lipgloss.Color("#14161c"))
+	panel        = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#2e3440"))
+	focusedPanel = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#c8a35a"))
+	draftStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#c8a35a"))
 )
 
 func firstCommentable(fd *domain.FileDiff) int {

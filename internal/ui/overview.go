@@ -53,40 +53,41 @@ func formatPRStatus(pr *domain.PullRequest, tasks []domain.Task) string {
 	if openRequired > 0 {
 		parts = append(parts, fmt.Sprintf("%d open task(s)", openRequired))
 	}
-	if badge := formatReviewBadge(pr.Reviews); badge != "" {
-		parts = append(parts, badge)
-	}
-	line := strings.Join(parts, " · ")
+	meta := strings.Join(parts, " · ")
 	st := lipgloss.NewStyle().Bold(true)
 	if blocked || len(pr.Reviews.ChangeRequesters) > 0 {
-		st = st.Foreground(lipgloss.Color("#f07178"))
+		st = st.Foreground(badgeChangesFg)
 	} else if pr.Draft {
-		st = st.Foreground(lipgloss.Color("#e6c07b"))
-	} else if len(pr.Reviews.Approvers) > 0 {
-		st = st.Foreground(lipgloss.Color("#98c379"))
+		st = st.Foreground(listAccent)
 	} else {
-		st = st.Foreground(lipgloss.Color("#98c379"))
+		st = st.Foreground(badgeApproveFg)
 	}
-	return st.Render(line)
+	out := st.Render(meta)
+	if badge := formatReviewBadge(pr.Reviews); badge != "" {
+		out += mutedStyle.Render(" · ") + badge
+	}
+	return out
 }
 
-// formatReviewBadge is a short badge for lists/status: "✓3 ✗1 you✓".
+// formatReviewBadge is a short badge for lists/status: "✓3 ✗1 you✓" with color.
 func formatReviewBadge(rs domain.ReviewStatus) string {
 	if !rs.HasReviews() && rs.ViewerDecision == domain.DecisionNone {
 		return ""
 	}
+	approve := lipgloss.NewStyle().Foreground(badgeApproveFg)
+	changes := lipgloss.NewStyle().Foreground(badgeChangesFg)
 	var parts []string
 	if n := len(rs.Approvers); n > 0 {
-		parts = append(parts, fmt.Sprintf("✓%d", n))
+		parts = append(parts, approve.Render(fmt.Sprintf("✓%d", n)))
 	}
 	if n := len(rs.ChangeRequesters); n > 0 {
-		parts = append(parts, fmt.Sprintf("✗%d", n))
+		parts = append(parts, changes.Render(fmt.Sprintf("✗%d", n)))
 	}
 	switch rs.ViewerDecision {
 	case domain.DecisionApproved:
-		parts = append(parts, "you✓")
+		parts = append(parts, approve.Render("you✓"))
 	case domain.DecisionChangesRequested:
-		parts = append(parts, "you✗")
+		parts = append(parts, changes.Render("you✗"))
 	}
 	return strings.Join(parts, " ")
 }

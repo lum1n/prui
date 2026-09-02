@@ -56,6 +56,7 @@ type fileItem struct {
 	file     domain.FileChange
 	drafts   int
 	comments int
+	maxTitle int // list content width for path fitting; 0 = no fit
 }
 
 func (i fileItem) Title() string {
@@ -72,7 +73,13 @@ func (i fileItem) Title() string {
 	if i.drafts > 0 || i.comments > 0 {
 		extra = fmt.Sprintf("  [%d/%d]", i.drafts, i.comments)
 	}
-	return mark + " " + i.file.Path + extra
+	prefix := mark + " "
+	path := i.file.Path
+	if i.maxTitle > 0 {
+		budget := i.maxTitle - len(prefix) - len(extra)
+		path = fitPathKeepBase(path, budget)
+	}
+	return prefix + path + extra
 }
 func (i fileItem) Description() string { return string(i.file.Status) }
 func (i fileItem) FilterValue() string { return i.file.Path }
@@ -1543,10 +1550,29 @@ func (m *Model) refreshFileList() {
 			commentCounts[c.Path]++
 		}
 	}
+	titleW := m.fileListTitleWidth()
 	for i, f := range m.files {
-		items[i] = fileItem{file: f, drafts: draftCounts[f.Path], comments: commentCounts[f.Path]}
+		items[i] = fileItem{
+			file:     f,
+			drafts:   draftCounts[f.Path],
+			comments: commentCounts[f.Path],
+			maxTitle: titleW,
+		}
 	}
 	m.fileList.SetItems(items)
+}
+
+func (m *Model) fileListTitleWidth() int {
+	w := m.fileList.Width()
+	if w <= 0 {
+		w = m.leftWidth - 2
+	}
+	// DefaultDelegate pads titles by 2; leave that for the list truncator.
+	w -= 2
+	if w < 8 {
+		w = 8
+	}
+	return w
 }
 
 func (m *Model) layout() {
@@ -1587,6 +1613,9 @@ func (m *Model) layout() {
 	}
 
 	m.fileList.SetSize(leftW-2, contentH-2) // account for panel border later
+	if len(m.files) > 0 {
+		m.refreshFileList()
+	}
 	m.diffVP.Width = rightW - 2
 	m.diffVP.Height = diffH - 2
 	m.bodyVP.Width = m.width

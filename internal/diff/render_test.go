@@ -60,3 +60,22 @@ func TestPaintAppliesLineBackground(t *testing.T) {
 		t.Fatalf("removed line missing background ANSI:\n%q", removed)
 	}
 }
+
+func TestPaintSelectedOverridesAddBg(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	h := diff.NewHighlighter("dark")
+	th := diff.DarkTheme()
+	plain := diff.Paint(h, "main.go", domain.DiffLine{
+		Kind: domain.LineAdded, NewNumber: 1, Text: "x",
+	}, diff.Options{Theme: th, Width: 60})
+	sel := diff.Paint(h, "main.go", domain.DiffLine{
+		Kind: domain.LineAdded, NewNumber: 1, Text: "x",
+	}, diff.Options{Theme: th, Width: 60, Selected: true})
+	if plain == sel {
+		t.Fatal("selected row should render differently from unselected add")
+	}
+	// Selected uses inverted gutter chip (#ffcc66 → 255;204;102)
+	if !strings.Contains(sel, "255;204;102") {
+		t.Fatalf("selected missing gutter chip color:\n%q", sel)
+	}
+}

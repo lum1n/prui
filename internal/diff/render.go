@@ -15,65 +15,71 @@ import (
 
 // Theme controls diff chrome colors (pierre/diffs-inspired, terminal-friendly).
 type Theme struct {
-	GutterFg     lipgloss.Color
-	HunkFg       lipgloss.Color
-	HunkBg       lipgloss.Color
-	AddFg        lipgloss.Color
-	AddBg        lipgloss.Color
-	AddBar       lipgloss.Color
-	DelFg        lipgloss.Color
-	DelBg        lipgloss.Color
-	DelBar       lipgloss.Color
-	SelectedBg   lipgloss.Color
-	SelectedBar  lipgloss.Color
-	HeaderFg     lipgloss.Color
-	HeaderBg     lipgloss.Color
-	AnnotationFg lipgloss.Color
-	DraftFg      lipgloss.Color
-	SepFg        lipgloss.Color
+	GutterFg         lipgloss.Color
+	HunkFg           lipgloss.Color
+	HunkBg           lipgloss.Color
+	AddFg            lipgloss.Color
+	AddBg            lipgloss.Color
+	AddBar           lipgloss.Color
+	DelFg            lipgloss.Color
+	DelBg            lipgloss.Color
+	DelBar           lipgloss.Color
+	SelectedBg       lipgloss.Color
+	SelectedBar      lipgloss.Color
+	SelectedGutterBg lipgloss.Color
+	SelectedGutterFg lipgloss.Color
+	HeaderFg         lipgloss.Color
+	HeaderBg         lipgloss.Color
+	AnnotationFg     lipgloss.Color
+	DraftFg          lipgloss.Color
+	SepFg            lipgloss.Color
 }
 
 // DarkTheme matches a calm dark review surface.
 func DarkTheme() Theme {
 	return Theme{
-		GutterFg:     lipgloss.Color("#5c6370"),
-		HunkFg:       lipgloss.Color("#7f8490"),
-		HunkBg:       lipgloss.Color("#1e222a"),
-		AddFg:        lipgloss.Color("#98c379"),
-		AddBg:        lipgloss.Color("#1e3a28"),
-		AddBar:       lipgloss.Color("#3fa866"),
-		DelFg:        lipgloss.Color("#e06c75"),
-		DelBg:        lipgloss.Color("#3a1e22"),
-		DelBar:       lipgloss.Color("#c44c55"),
-		SelectedBg:   lipgloss.Color("#2c313a"),
-		SelectedBar:  lipgloss.Color("#e5c07b"),
-		HeaderFg:     lipgloss.Color("#dcdfe4"),
-		HeaderBg:     lipgloss.Color("#21252b"),
-		AnnotationFg: lipgloss.Color("#61afef"),
-		DraftFg:      lipgloss.Color("#e5c07b"),
-		SepFg:        lipgloss.Color("#3e4451"),
+		GutterFg:         lipgloss.Color("#5c6370"),
+		HunkFg:           lipgloss.Color("#7f8490"),
+		HunkBg:           lipgloss.Color("#1e222a"),
+		AddFg:            lipgloss.Color("#98c379"),
+		AddBg:            lipgloss.Color("#1e3a28"),
+		AddBar:           lipgloss.Color("#3fa866"),
+		DelFg:            lipgloss.Color("#e06c75"),
+		DelBg:            lipgloss.Color("#3a1e22"),
+		DelBar:           lipgloss.Color("#c44c55"),
+		SelectedBg:       lipgloss.Color("#3a4559"), // cool blue-gray — contrasts green/red
+		SelectedBar:      lipgloss.Color("#ffcc66"),
+		SelectedGutterBg: lipgloss.Color("#ffcc66"),
+		SelectedGutterFg: lipgloss.Color("#1a1d23"),
+		HeaderFg:         lipgloss.Color("#dcdfe4"),
+		HeaderBg:         lipgloss.Color("#21252b"),
+		AnnotationFg:     lipgloss.Color("#61afef"),
+		DraftFg:          lipgloss.Color("#e5c07b"),
+		SepFg:            lipgloss.Color("#3e4451"),
 	}
 }
 
 // LightTheme is a light review surface.
 func LightTheme() Theme {
 	return Theme{
-		GutterFg:     lipgloss.Color("#6a737d"),
-		HunkFg:       lipgloss.Color("#6a737d"),
-		HunkBg:       lipgloss.Color("#f0f3f6"),
-		AddFg:        lipgloss.Color("#22863a"),
-		AddBg:        lipgloss.Color("#e6ffed"),
-		AddBar:       lipgloss.Color("#28a745"),
-		DelFg:        lipgloss.Color("#b31d28"),
-		DelBg:        lipgloss.Color("#ffeef0"),
-		DelBar:       lipgloss.Color("#d73a49"),
-		SelectedBg:   lipgloss.Color("#fff8c5"),
-		SelectedBar:  lipgloss.Color("#dbab09"),
-		HeaderFg:     lipgloss.Color("#24292e"),
-		HeaderBg:     lipgloss.Color("#f6f8fa"),
-		AnnotationFg: lipgloss.Color("#0366d6"),
-		DraftFg:      lipgloss.Color("#b08800"),
-		SepFg:        lipgloss.Color("#d1d5da"),
+		GutterFg:         lipgloss.Color("#6a737d"),
+		HunkFg:           lipgloss.Color("#6a737d"),
+		HunkBg:           lipgloss.Color("#f0f3f6"),
+		AddFg:            lipgloss.Color("#22863a"),
+		AddBg:            lipgloss.Color("#e6ffed"),
+		AddBar:           lipgloss.Color("#28a745"),
+		DelFg:            lipgloss.Color("#b31d28"),
+		DelBg:            lipgloss.Color("#ffeef0"),
+		DelBar:           lipgloss.Color("#d73a49"),
+		SelectedBg:       lipgloss.Color("#cce0ff"),
+		SelectedBar:      lipgloss.Color("#0969da"),
+		SelectedGutterBg: lipgloss.Color("#0969da"),
+		SelectedGutterFg: lipgloss.Color("#ffffff"),
+		HeaderFg:         lipgloss.Color("#24292e"),
+		HeaderBg:         lipgloss.Color("#f6f8fa"),
+		AnnotationFg:     lipgloss.Color("#0366d6"),
+		DraftFg:          lipgloss.Color("#b08800"),
+		SepFg:            lipgloss.Color("#d1d5da"),
 	}
 }
 
@@ -267,11 +273,10 @@ func paintUnified(h *Highlighter, path string, line domain.DiffLine, th Theme, w
 	}
 
 	if selected {
+		// Always override add/remove tint — selection must read clearly on colored rows.
 		bar = "▌"
 		barCol = th.SelectedBar
-		if rowBg == "" {
-			rowBg = th.SelectedBg
-		}
+		rowBg = th.SelectedBg
 	}
 
 	withBG := func(st lipgloss.Style) lipgloss.Style {
@@ -282,7 +287,21 @@ func paintUnified(h *Highlighter, path string, line domain.DiffLine, th Theme, w
 	}
 
 	gutterStyle := withBG(lipgloss.NewStyle().Foreground(th.GutterFg).Width(gutterW).Align(lipgloss.Right))
-	numStyle := withBG(lipgloss.NewStyle().Foreground(numFg).Width(gutterW).Align(lipgloss.Right))
+	numStyle := withBG(lipgloss.NewStyle().Foreground(numFg).Width(gutterW).Align(lipgloss.Right).Bold(selected))
+	if selected {
+		// Inverted gutter chip so the cursor line is obvious even on busy syntax.
+		numStyle = lipgloss.NewStyle().
+			Foreground(th.SelectedGutterFg).
+			Background(th.SelectedGutterBg).
+			Width(gutterW).
+			Align(lipgloss.Right).
+			Bold(true)
+		gutterStyle = lipgloss.NewStyle().
+			Foreground(th.SelectedGutterFg).
+			Background(th.SelectedGutterBg).
+			Width(gutterW).
+			Align(lipgloss.Right)
+	}
 
 	var oldG, newG string
 	switch line.Kind {
@@ -294,7 +313,7 @@ func paintUnified(h *Highlighter, path string, line domain.DiffLine, th Theme, w
 		newG = gutterStyle.Render(" ")
 	default:
 		oldG = gutterStyle.Render(gutterNum(line.OldNumber))
-		newG = gutterStyle.Render(gutterNum(line.NewNumber))
+		newG = numStyle.Render(gutterNum(line.NewNumber))
 	}
 
 	code := line.Text
@@ -304,12 +323,15 @@ func paintUnified(h *Highlighter, path string, line domain.DiffLine, th Theme, w
 		code = lipgloss.NewStyle().Background(rowBg).Render(code)
 	}
 
-	signSt := withBG(lipgloss.NewStyle().Width(1).Foreground(th.GutterFg))
+	signSt := withBG(lipgloss.NewStyle().Width(1).Foreground(th.GutterFg).Bold(selected))
 	switch line.Kind {
 	case domain.LineAdded:
-		signSt = withBG(lipgloss.NewStyle().Width(1).Foreground(th.AddFg))
+		signSt = withBG(lipgloss.NewStyle().Width(1).Foreground(th.AddFg).Bold(selected))
 	case domain.LineRemoved:
-		signSt = withBG(lipgloss.NewStyle().Width(1).Foreground(th.DelFg))
+		signSt = withBG(lipgloss.NewStyle().Width(1).Foreground(th.DelFg).Bold(selected))
+	}
+	if selected {
+		signSt = withBG(lipgloss.NewStyle().Width(1).Foreground(th.SelectedBar).Bold(true))
 	}
 
 	chromeW := gutterW + 1 + gutterW + 1 + 1 + 1 + 1
@@ -317,10 +339,14 @@ func paintUnified(h *Highlighter, path string, line domain.DiffLine, th Theme, w
 	if codeW < 8 {
 		codeW = 8
 	}
-	code = withBG(lipgloss.NewStyle().Width(codeW).MaxWidth(codeW)).Render(code)
+	code = withBG(lipgloss.NewStyle().Width(codeW).MaxWidth(codeW).Bold(selected)).Render(code)
 
-	sep := withBG(lipgloss.NewStyle().Foreground(th.SepFg)).Render("│")
-	barS := withBG(lipgloss.NewStyle().Width(1).Foreground(barCol)).Render(bar)
+	sepCol := th.SepFg
+	if selected {
+		sepCol = th.SelectedBar
+	}
+	sep := withBG(lipgloss.NewStyle().Foreground(sepCol)).Render("│")
+	barS := withBG(lipgloss.NewStyle().Width(1).Foreground(barCol).Bold(selected)).Render(bar)
 	gap := withBG(lipgloss.NewStyle()).Render(" ")
 
 	row := oldG + sep + newG + barS + signSt.Render(sign) + gap + code
@@ -341,7 +367,11 @@ func paintSplit(h *Highlighter, path string, line domain.DiffLine, th Theme, wid
 	rightW := width - half
 
 	empty := func(w int) string {
-		return lipgloss.NewStyle().Width(w).MaxWidth(w).Render("")
+		bg := lipgloss.NewStyle().Width(w).MaxWidth(w)
+		if selected {
+			bg = bg.Background(th.SelectedBg)
+		}
+		return bg.Render("")
 	}
 	side := func(num int, kind domain.LineType, raw string, w int) string {
 		barCol := th.SepFg
@@ -362,9 +392,7 @@ func paintSplit(h *Highlighter, path string, line domain.DiffLine, th Theme, wid
 		}
 		if selected {
 			barCol = th.SelectedBar
-			if bg == "" {
-				bg = th.SelectedBg
-			}
+			bg = th.SelectedBg
 		}
 		withBG := func(st lipgloss.Style) lipgloss.Style {
 			if bg != "" {
@@ -372,9 +400,21 @@ func paintSplit(h *Highlighter, path string, line domain.DiffLine, th Theme, wid
 			}
 			return st
 		}
-		g := withBG(lipgloss.NewStyle().Foreground(numFg).Width(4).Align(lipgloss.Right)).Render(gutterNum(num))
-		bar := withBG(lipgloss.NewStyle().Foreground(barCol)).Render("┃")
-		signS := withBG(lipgloss.NewStyle().Foreground(barCol)).Render(sign)
+		gStyle := withBG(lipgloss.NewStyle().Foreground(numFg).Width(4).Align(lipgloss.Right).Bold(selected))
+		if selected {
+			gStyle = lipgloss.NewStyle().
+				Foreground(th.SelectedGutterFg).
+				Background(th.SelectedGutterBg).
+				Width(4).
+				Align(lipgloss.Right).
+				Bold(true)
+		}
+		g := gStyle.Render(gutterNum(num))
+		bar := withBG(lipgloss.NewStyle().Foreground(barCol).Bold(selected)).Render("▌")
+		if !selected {
+			bar = withBG(lipgloss.NewStyle().Foreground(barCol)).Render("┃")
+		}
+		signS := withBG(lipgloss.NewStyle().Foreground(barCol).Bold(selected)).Render(sign)
 		gap := withBG(lipgloss.NewStyle()).Render(" ")
 		innerW := w - 4 - 1 - 1 - 1
 		if innerW < 4 {
@@ -388,7 +428,7 @@ func paintSplit(h *Highlighter, path string, line domain.DiffLine, th Theme, wid
 		} else {
 			body = raw
 		}
-		body = withBG(lipgloss.NewStyle().Width(innerW).MaxWidth(innerW)).Render(body)
+		body = withBG(lipgloss.NewStyle().Width(innerW).MaxWidth(innerW).Bold(selected)).Render(body)
 		row := g + bar + signS + gap + body
 		st := lipgloss.NewStyle().Width(w).MaxWidth(w)
 		if bg != "" {

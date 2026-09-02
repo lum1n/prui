@@ -197,7 +197,7 @@ prui version
 | `x` | Delete draft on line |
 | `v` | Range select |
 | `y` | Yank plain code (cursor line or visual range; no gutters) |
-| `r` | Submit review |
+| `r` | Submit review (comment / approve / request changes) |
 | `[`/`]` | Prev/next hunk |
 | `o` | Show PR URL |
 | `O` | Open PR in browser |

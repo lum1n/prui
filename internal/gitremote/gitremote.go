@@ -45,7 +45,6 @@ func ParseTarget(raw string, cfg *config.Config) (Resolved, error) {
 func parseOwnerRepoPR(raw string, cfg *config.Config) (Resolved, error) {
 	m := ownerRepoPR.FindStringSubmatch(raw)
 	if m == nil {
-		// owner/repo without PR
 		parts := strings.Split(raw, "/")
 		if len(parts) != 2 || strings.Contains(parts[1], "#") {
 			return Resolved{}, fmt.Errorf("not owner/repo")
@@ -77,10 +76,9 @@ func parseURL(raw string, cfg *config.Config) (Resolved, error) {
 		return Resolved{}, fmt.Errorf("not a URL")
 	}
 
-	host, ok := cfg.MatchBaseURL(u.Scheme + "://" + u.Host)
-	if !ok {
-		// infer kind from hostname
-		host = inferHostFromHostname(u.Host, cfg)
+	host, err := cfg.ResolveRemoteHost(u.Hostname())
+	if err != nil {
+		return Resolved{}, err
 	}
 
 	path := strings.Trim(u.Path, "/")
@@ -88,7 +86,6 @@ func parseURL(raw string, cfg *config.Config) (Resolved, error) {
 
 	switch host.Kind {
 	case domain.HostGitHub:
-		// /owner/repo/pull/123
 		if len(parts) >= 4 && parts[2] == "pull" {
 			n, _ := strconv.Atoi(parts[3])
 			return Resolved{
@@ -106,7 +103,6 @@ func parseURL(raw string, cfg *config.Config) (Resolved, error) {
 			}, nil
 		}
 	case domain.HostBitbucketCloud:
-		// /workspace/repo/pull-requests/123
 		if len(parts) >= 4 && parts[2] == "pull-requests" {
 			n, _ := strconv.Atoi(parts[3])
 			return Resolved{
@@ -124,7 +120,6 @@ func parseURL(raw string, cfg *config.Config) (Resolved, error) {
 			}, nil
 		}
 	case domain.HostBitbucketDC:
-		// /projects/KEY/repos/slug/pull-requests/123
 		if len(parts) >= 6 && parts[0] == "projects" && parts[2] == "repos" && parts[4] == "pull-requests" {
 			n, _ := strconv.Atoi(parts[5])
 			return Resolved{
@@ -145,50 +140,6 @@ func parseURL(raw string, cfg *config.Config) (Resolved, error) {
 	return Resolved{}, fmt.Errorf("could not parse PR from URL")
 }
 
-func inferHostFromHostname(hostname string, cfg *config.Config) domain.Host {
-	h := strings.ToLower(hostname)
-	if strings.Contains(h, "github") {
-		host, err := cfg.FindHost("github")
-		if err == nil {
-			return host
-		}
-		return domain.Host{
-			Name:    "github",
-			Kind:    domain.HostGitHub,
-			BaseURL: "https://" + hostname,
-			APIURL:  "https://api.github.com/",
-		}
-	}
-	if strings.Contains(h, "bitbucket.org") {
-		host, err := cfg.FindHost("bitbucket")
-		if err == nil {
-			return host
-		}
-		return domain.Host{
-			Name:    "bitbucket",
-			Kind:    domain.HostBitbucketCloud,
-			BaseURL: "https://bitbucket.org",
-			APIURL:  "https://api.bitbucket.org/2.0",
-		}
-	}
-	// on-prem guess: prefer configured DC, else github enterprise shape
-	for _, hc := range cfg.Hosts {
-		dh := hc.ToDomain()
-		if dh.Kind == domain.HostBitbucketDC && strings.Contains(strings.ToLower(dh.BaseURL), h) {
-			return dh
-		}
-		if dh.Kind == domain.HostGitHub && strings.Contains(strings.ToLower(dh.BaseURL), h) {
-			return dh
-		}
-	}
-	return domain.Host{
-		Name:    hostname,
-		Kind:    domain.HostGitHub,
-		BaseURL: "https://" + hostname,
-		APIURL:  "https://" + hostname + "/api/v3",
-	}
-}
-
 // FromGitRemote resolves owner/repo from the current git origin and config host map.
 func FromGitRemote(cfg *config.Config) (Resolved, error) {
 	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
@@ -206,9 +157,9 @@ func ParseRemote(remote string, cfg *config.Config) (Resolved, error) {
 	if m := sshGitHub.FindStringSubmatch(remote); m != nil {
 		hostName := m[1]
 		owner, name := m[2], strings.TrimSuffix(m[3], ".git")
-		host, ok := cfg.MatchBaseURL("https://" + hostName)
-		if !ok {
-			host = inferHostFromHostname(hostName, cfg)
+		host, err := cfg.ResolveRemoteHost(hostName)
+		if err != nil {
+			return Resolved{}, err
 		}
 		return Resolved{Host: host, Repo: domain.RepoRef{Owner: owner, Name: name}}, nil
 	}
@@ -218,15 +169,14 @@ func ParseRemote(remote string, cfg *config.Config) (Resolved, error) {
 		if err != nil {
 			return Resolved{}, err
 		}
-		host, ok := cfg.MatchBaseURL(u.Scheme + "://" + u.Host)
-		if !ok {
-			host = inferHostFromHostname(u.Host, cfg)
+		host, err := cfg.ResolveRemoteHost(u.Hostname())
+		if err != nil {
+			return Resolved{}, err
 		}
 		path := strings.Trim(strings.TrimSuffix(u.Path, ".git"), "/")
 		parts := strings.Split(path, "/")
 		switch host.Kind {
 		case domain.HostBitbucketDC:
-			// /scm/project/repo.git or /projects/KEY/repos/slug
 			if len(parts) >= 3 && parts[0] == "scm" {
 				return Resolved{Host: host, Repo: domain.RepoRef{Owner: parts[1], Name: parts[2]}}, nil
 			}
@@ -243,9 +193,9 @@ func ParseRemote(remote string, cfg *config.Config) (Resolved, error) {
 		hostName := m[1]
 		rest := strings.TrimSuffix(m[2], ".git")
 		parts := strings.Split(rest, "/")
-		host, ok := cfg.MatchBaseURL("https://" + hostName)
-		if !ok {
-			host = inferHostFromHostname(hostName, cfg)
+		host, err := cfg.ResolveRemoteHost(hostName)
+		if err != nil {
+			return Resolved{}, err
 		}
 		if len(parts) >= 2 {
 			return Resolved{Host: host, Repo: domain.RepoRef{Owner: parts[len(parts)-2], Name: parts[len(parts)-1]}}, nil

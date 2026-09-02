@@ -50,11 +50,13 @@ hosts:
     base_url: https://bitbucket.example.com
     api_url: https://bitbucket.example.com/rest/api/1.0
     cookie_env: BB_COOKIE
+    match_hosts:
+      - git-ssh.example.com
     # token_env: BB_TOKEN
     # username: yourname
 
 defaults:
-  host: work-ghe
+  host: work-bb
 
 ui:
   diff: unified
@@ -71,6 +73,8 @@ prui auth status
 ```
 
 When both `cookie_env` and `token_env` are configured, a set cookie wins. For `github.com` without `cookie_env`, prui still falls back to `gh auth token`.
+
+If your git SSH hostname differs from `base_url` (common on Bitbucket DC), add it under `match_hosts`. With a single configured host (or `defaults.host` set), prui falls back to that host when the remote hostname is not listed.
 
 ## Usage
 

@@ -49,14 +49,15 @@ const (
 
 // Host describes a configured forge endpoint.
 type Host struct {
-	Name      string
-	Kind      HostKind
-	BaseURL   string
-	APIURL    string
-	TokenEnv  string
-	CookieEnv string // env var holding a raw Cookie header value (session auth)
-	Username  string
-	CACert    string
+	Name       string
+	Kind       HostKind
+	BaseURL    string
+	APIURL     string
+	TokenEnv   string
+	CookieEnv  string   // env var holding a raw Cookie header value (session auth)
+	MatchHosts []string // extra hostnames (e.g. git SSH) that map to this host
+	Username   string
+	CACert     string
 }
 
 // RepoRef identifies a repository on a host.

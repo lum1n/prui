@@ -19,14 +19,15 @@ type Config struct {
 
 // HostConfig is one forge endpoint in YAML.
 type HostConfig struct {
-	Name      string `mapstructure:"name"`
-	Kind      string `mapstructure:"kind"`
-	BaseURL   string `mapstructure:"base_url"`
-	APIURL    string `mapstructure:"api_url"`
-	TokenEnv  string `mapstructure:"token_env"`
-	CookieEnv string `mapstructure:"cookie_env"`
-	Username  string `mapstructure:"username"`
-	CACert    string `mapstructure:"ca_cert"`
+	Name       string   `mapstructure:"name"`
+	Kind       string   `mapstructure:"kind"`
+	BaseURL    string   `mapstructure:"base_url"`
+	APIURL     string   `mapstructure:"api_url"`
+	TokenEnv   string   `mapstructure:"token_env"`
+	CookieEnv  string   `mapstructure:"cookie_env"`
+	MatchHosts []string `mapstructure:"match_hosts"` // SSH / alternate hostnames
+	Username   string   `mapstructure:"username"`
+	CACert     string   `mapstructure:"ca_cert"`
 }
 
 // Defaults holds default host selection.
@@ -135,14 +136,15 @@ func (h HostConfig) ToDomain() domain.Host {
 		kind = domain.HostGitHub
 	}
 	return domain.Host{
-		Name:      h.Name,
-		Kind:      kind,
-		BaseURL:   strings.TrimRight(h.BaseURL, "/"),
-		APIURL:    strings.TrimRight(h.APIURL, "/"),
-		TokenEnv:  h.TokenEnv,
-		CookieEnv: h.CookieEnv,
-		Username:  h.Username,
-		CACert:    h.CACert,
+		Name:       h.Name,
+		Kind:       kind,
+		BaseURL:    strings.TrimRight(h.BaseURL, "/"),
+		APIURL:     strings.TrimRight(h.APIURL, "/"),
+		TokenEnv:   h.TokenEnv,
+		CookieEnv:  h.CookieEnv,
+		MatchHosts: append([]string(nil), h.MatchHosts...),
+		Username:   h.Username,
+		CACert:     h.CACert,
 	}
 }
 
@@ -165,9 +167,73 @@ func (c *Config) FindHost(name string) (domain.Host, error) {
 	return c.Hosts[0].ToDomain(), nil
 }
 
+// MatchHostname finds a configured host for a git/API hostname.
+// It checks match_hosts, base_url, and api_url. It does not invent hosts.
+func (c *Config) MatchHostname(hostname string) (domain.Host, bool) {
+	hostname = strings.ToLower(strings.TrimSpace(hostname))
+	if i := strings.IndexByte(hostname, ':'); i >= 0 {
+		hostname = hostname[:i] // strip port
+	}
+	if hostname == "" {
+		return domain.Host{}, false
+	}
+
+	for _, h := range c.Hosts {
+		dh := h.ToDomain()
+		for _, m := range dh.MatchHosts {
+			if strings.EqualFold(strings.TrimSpace(m), hostname) {
+				return dh, true
+			}
+		}
+		for _, cand := range []string{dh.BaseURL, dh.APIURL} {
+			if cand == "" {
+				continue
+			}
+			if hostnameOf(cand) == hostname {
+				return dh, true
+			}
+		}
+	}
+	return domain.Host{}, false
+}
+
+// ResolveRemoteHost maps a remote hostname to a configured host.
+// Order: explicit hostname match → defaults.host → sole configured host.
+func (c *Config) ResolveRemoteHost(hostname string) (domain.Host, error) {
+	if host, ok := c.MatchHostname(hostname); ok {
+		return host, nil
+	}
+	// Also accept full URLs via MatchBaseURL for https remotes.
+	if host, ok := c.MatchBaseURL("https://" + hostname); ok {
+		return host, nil
+	}
+
+	if c.Defaults.Host != "" {
+		if host, err := c.FindHost(c.Defaults.Host); err == nil {
+			return host, nil
+		}
+	}
+	if len(c.Hosts) == 1 {
+		return c.Hosts[0].ToDomain(), nil
+	}
+
+	var names []string
+	for _, h := range c.Hosts {
+		names = append(names, h.Name)
+	}
+	return domain.Host{}, fmt.Errorf(
+		"git remote host %q is not mapped to any configured host %v\nAdd it under match_hosts, e.g.:\n\n  match_hosts:\n    - %s\n\nOr pass --host <name>",
+		hostname, names, hostname,
+	)
+}
+
 // MatchBaseURL finds a host whose base or API URL matches the given hostname/URL.
 func (c *Config) MatchBaseURL(raw string) (domain.Host, bool) {
 	raw = strings.TrimRight(strings.ToLower(raw), "/")
+	host := hostnameOf(raw)
+	if h, ok := c.MatchHostname(host); ok {
+		return h, true
+	}
 	for _, h := range c.Hosts {
 		dh := h.ToDomain()
 		candidates := []string{
@@ -178,7 +244,7 @@ func (c *Config) MatchBaseURL(raw string) (domain.Host, bool) {
 			if cand == "" {
 				continue
 			}
-			if raw == cand || strings.Contains(raw, hostnameOf(cand)) || strings.Contains(cand, hostnameOf(raw)) {
+			if raw == cand || strings.Contains(raw, hostnameOf(cand)) || strings.Contains(cand, host) {
 				return dh, true
 			}
 		}
@@ -189,8 +255,26 @@ func (c *Config) MatchBaseURL(raw string) (domain.Host, bool) {
 func hostnameOf(u string) string {
 	u = strings.TrimPrefix(u, "https://")
 	u = strings.TrimPrefix(u, "http://")
+	u = strings.TrimPrefix(u, "ssh://")
 	if i := strings.IndexByte(u, '/'); i >= 0 {
 		u = u[:i]
 	}
+	if i := strings.IndexByte(u, ':'); i >= 0 {
+		// host:port — but avoid breaking user@host (already stripped schemes)
+		// only strip numeric ports
+		port := u[i+1:]
+		if port != "" && isAllDigits(port) {
+			u = u[:i]
+		}
+	}
 	return strings.ToLower(u)
+}
+
+func isAllDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
 }

@@ -72,3 +72,51 @@ func TestParseRemoteBBDCSCM(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+func TestParseRemoteMatchHosts(t *testing.T) {
+	cfg := testCfg()
+	for i := range cfg.Hosts {
+		if cfg.Hosts[i].Name == "bbdc" {
+			cfg.Hosts[i].MatchHosts = []string{"git-ssh.intra.eika.no"}
+		}
+	}
+	r, err := gitremote.ParseRemote("git@git-ssh.intra.eika.no:PROJ/smartspar.git", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Host.Name != "bbdc" || r.Host.Kind != domain.HostBitbucketDC {
+		t.Fatalf("host %+v", r.Host)
+	}
+	if r.Repo.Owner != "PROJ" || r.Repo.Name != "smartspar" {
+		t.Fatalf("repo %+v", r.Repo)
+	}
+}
+
+func TestParseRemoteSoleHostFallback(t *testing.T) {
+	cfg := &config.Config{
+		Hosts: []config.HostConfig{
+			{
+				Name: "work-bb", Kind: string(domain.HostBitbucketDC),
+				BaseURL: "https://bitbucket.intra.eika.no",
+				APIURL:  "https://bitbucket.intra.eika.no/rest/api/1.0",
+			},
+		},
+		Defaults: config.Defaults{Host: "work-bb"},
+	}
+	r, err := gitremote.ParseRemote("git@git-ssh.intra.eika.no:PROJ/repo.git", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Host.Name != "work-bb" {
+		t.Fatalf("expected work-bb, got %+v", r.Host)
+	}
+}
+
+func TestParseRemoteUnmappedMultiHost(t *testing.T) {
+	cfg := testCfg()
+	cfg.Defaults.Host = ""
+	_, err := gitremote.ParseRemote("git@unknown.example:acme/repo.git", cfg)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}

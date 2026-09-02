@@ -28,11 +28,14 @@ hosts:
     base_url: https://bitbucket.example.com
     api_url: https://bitbucket.example.com/rest/api/1.0
     cookie_env: BB_COOKIE
+    # SSH clone host often differs from the web/API host — map it explicitly:
+    match_hosts:
+      - git-ssh.example.com
     # token_env: BB_TOKEN
     # username: yourname
 
 defaults:
-  host: github
+  host: work-bb
 
 ui:
   diff: unified

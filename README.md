@@ -6,11 +6,11 @@ Terminal UI for reviewing pull requests on **GitHub** (cloud + Enterprise) and *
 
 - List and open PRs from the current git remote or an explicit target
 - PR list tabs: **Open**, **Drafts**, **Merged** (merged is view-only)
-- Syntax-highlighted unified diffs (Chroma; pierre-inspired line annotations)
+- Syntax-highlighted unified diffs
 - Draft inline / threaded comments, yank plain code, submit reviews
 - Multi-host config (on-prem URLs, optional custom CA)
 - Review status: approvals, change requests, and whether you approved
-- Optional **AI summarize** (`S`) via Claude, GitHub Copilot (cloud/GHE), Codex, or OpenCode
+- Optional **AI summarize** (`S`) via Claude, GitHub Copilot, Codex, or OpenCode
 - Device login: `prui auth login` stores a token so you don’t need to export secrets
 
 ## Install
@@ -19,38 +19,24 @@ Terminal UI for reviewing pull requests on **GitHub** (cloud + Enterprise) and *
 curl -fsSL https://raw.githubusercontent.com/lum1n/prui/master/install.sh | sh
 ```
 
-Installs to `~/.local/bin/prui` (override with `BINDIR=/usr/local/bin`). Requires a published GitHub Release.
+Installs to `~/.local/bin/prui` (override with `BINDIR=/usr/local/bin`). Requires a published [GitHub Release](https://github.com/lum1n/prui/releases).
 
 ```bash
-go install github.com/lum1n/prui/cmd/prui@latest   # compile from source (Go 1.26+)
-make install                                       # from a clone
+go install github.com/lum1n/prui/cmd/prui@latest   # Go 1.26+
 prui version
 ```
 
-### Cutting a release
-
-Push a semver tag; GitHub Actions runs GoReleaser (linux/darwin × amd64/arm64):
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-Update `internal/version/version.go`’s default `Version` when you want untagged `go build` to report the same number.
+Maintainer build/release notes: [`BUILD.md`](BUILD.md).
 
 ## Quick start
 
 ```bash
-# 1. Config — copy and edit
 mkdir -p ~/.config/prui
-cp config.example.yaml ~/.config/prui/config.yaml
+cp config.example.yaml ~/.config/prui/config.yaml   # edit hosts as needed
 
-# 2. Log in to each GitHub/GHE host you use (device/browser via gh)
-prui auth login --hostname github.com
-prui auth login --hostname ghe.example.com
-
+prui auth login --hostname github.com               # GitHub / GHE
 prui auth status
-prui                          # list open PRs for current git remote
+prui                                                # list PRs for current git remote
 ```
 
 ## Config
@@ -66,7 +52,7 @@ hosts:
     base_url: https://github.com
     api_url: https://api.github.com/
 
-  - name: work-ghe
+  - name: ghe
     kind: github
     base_url: https://ghe.example.com
     api_url: https://ghe.example.com/api/v3
@@ -74,16 +60,23 @@ hosts:
     #   - git.ghe.example.com
     # ca_cert: /path/to/corp-ca.pem
 
-  - name: work-bb
+  - name: bitbucket
+    kind: bitbucket_cloud
+    base_url: https://bitbucket.org
+    api_url: https://api.bitbucket.org/2.0
+    token_env: BITBUCKET_TOKEN
+    username: yourname
+
+  - name: bitbucket-dc
     kind: bitbucket_dc
     base_url: https://bitbucket.example.com
     api_url: https://bitbucket.example.com/rest/api/1.0
-    cookie_env: BB_COOKIE    # Bitbucket DC often needs session cookies
+    cookie_env: BB_COOKIE
     match_hosts:
-      - git-ssh.example.com
+      - git.bitbucket.example.com
 
 defaults:
-  host: work-bb
+  host: github
 
 ui:
   diff: unified      # unified | split
@@ -101,15 +94,15 @@ Secrets are never stored in the YAML file.
 |--------|-------------|
 | `prui auth login --hostname HOST` | Preferred for GitHub.com / GHE. Saves token to `~/.config/prui/credentials.json` (0600). |
 | `prui auth login --host NAME` | Same, using a `hosts[].name` from config. |
-| `prui auth login --hostname HOST --client-id ID` | Native device flow (no `gh`); needs an OAuth App on that GHE. |
+| `prui auth login --hostname HOST --client-id ID` | Native device flow (no `gh`); needs an OAuth App on that host. |
 | Env `token_env` / `cookie_env` | Override or Bitbucket cookies; a **set** cookie wins over token/store. |
 
 Resolution order for GitHub/GHE: **env cookie → env token → stored login → `gh auth token`**.
 
 ```bash
-prui auth login --hostname ghe.example.com
+prui auth login --hostname github.com
 prui auth status
-prui auth logout --hostname ghe.example.com
+prui auth logout --hostname github.com
 ```
 
 Bitbucket cookie example:
@@ -120,11 +113,11 @@ export BB_COOKIE='JSESSIONID=...; BITBUCKETSESSIONID=...'
 
 ### AI summarize
 
-Press **`S`** in review or overview. Provider is chosen only from config (`ai.default`) — no in-app picker.
+Press **`S`** in review or overview. The provider is chosen from config (`ai.default`) — no in-app picker.
 
 ```yaml
 ai:
-  default: copilot-ghe          # name under providers
+  default: claude
   max_context_bytes: 120000
   timeout_sec: 120
   providers:
@@ -133,22 +126,16 @@ ai:
       model: claude-sonnet-4-5
       token_env: ANTHROPIC_API_KEY
 
-    # GitHub.com Copilot (uses github.com login / GITHUB_TOKEN / gh)
     copilot:
       kind: copilot
-      model: gpt-4o             # or omit to auto-pick; gpt-4.1 may be unavailable on some SKUs
-
-    # GHE Copilot while reviewing Bitbucket (no GHE hosts entry required)
-    copilot-ghe:
-      kind: copilot
       model: gpt-4o
-      api_url: https://ghe.example.com/api/v3
-      # Or reuse a forge host:
-      # github_host: work-ghe
+      # For GitHub Enterprise Copilot, set api_url or github_host:
+      # api_url: https://ghe.example.com/api/v3
+      # github_host: ghe
 
     codex:
       kind: codex
-      # model: ""               # optional --model for `codex exec`
+      # model: ""
       # binary: codex
 
     opencode:
@@ -157,23 +144,16 @@ ai:
       # binary: opencode
 ```
 
-**Copilot + GHE (typical with Bitbucket as the forge):**
-
-1. Set `api_url` (or `github_host`) on the provider as above.
-2. `prui auth login --hostname ghe.example.com`
-3. Open a PR → `S`
-
-If you see `The requested model is not supported`, change `model` to one your org allows (often `gpt-4o` or `gpt-4o-mini`), or leave `model` empty once auto-pick is available in your build.
+If Copilot returns `The requested model is not supported`, set `model` to one your org allows (for example `gpt-4o`), or omit `model` to let prui pick.
 
 ## Usage
 
 ```bash
-prui                          # list open PRs for current git remote
+prui                          # list PRs for current git remote
 prui owner/repo#42            # open a specific PR
-prui https://ghe.example.com/org/repo/pull/42
-prui --host work-bb PROJECT/repo#7
+prui https://github.com/owner/repo/pull/42
+prui --host bitbucket-dc PROJECT/repo#7
 
-prui auth login --hostname ghe.example.com
 prui auth status
 prui pr list owner/repo
 prui version
@@ -207,7 +187,7 @@ prui version
 | `?` | Help |
 | `q` | Back / quit |
 
-Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): shows **Reviews** (who approved / requested changes / your decision), then `tab` through Tasks / Description / Summary / Conversation. Submit (`r`) offers Comment, Approve, and Request changes (GitHub event, Bitbucket Cloud request-changes, Bitbucket DC NEEDS_WORK). Yank (`y`): source text only for the cursor line or `v` range. **Merged** PRs are view-only (no comments, task toggles, or submit).
+Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): tab through Tasks / Description / Summary / Conversation. Submit (`r`) offers Comment, Approve, and Request changes. **Merged** PRs are view-only (no comments, task toggles, or submit).
 
 ## Architecture
 

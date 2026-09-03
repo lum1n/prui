@@ -23,7 +23,10 @@ func TestFormatTasksSection(t *testing.T) {
 		{ID: "1", Body: "fix it", Done: false, Required: true},
 		{ID: "2", Body: "ship it", Done: true},
 	}
-	out := formatTasksSection(tasks, 0, true, 60)
+	out, focus := formatTasksSection(tasks, 0, true, 60)
+	if focus < 0 {
+		t.Fatal("expected focus line for selected task")
+	}
 	for _, part := range []string{"Tasks", "[ ]", "fix it", "[x]", "ship it", ">"} {
 		if !strings.Contains(out, part) {
 			t.Fatalf("missing %q in:\n%s", part, out)
@@ -33,7 +36,7 @@ func TestFormatTasksSection(t *testing.T) {
 
 func TestFormatOverview(t *testing.T) {
 	pr := &domain.PullRequest{Title: "Add feature", State: "open"}
-	out := formatOverview(pr, nil, 0, nil, 0, sectionDescription, "hello body", "", "", false, "medium", 60)
+	out, _ := formatOverview(pr, nil, 0, nil, 0, sectionDescription, "hello body", "", "", false, "medium", 60)
 	for _, part := range []string{"Add feature", "open", "Reviews", "Tasks", "Description", "Summary", "Conversation", "hello body"} {
 		if !strings.Contains(out, part) {
 			t.Fatalf("missing %q in:\n%s", part, out)

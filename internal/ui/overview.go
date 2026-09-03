@@ -121,14 +121,15 @@ func formatReviewsSection(rs domain.ReviewStatus, width int) string {
 	return b.String()
 }
 
-func formatTasksSection(tasks []domain.Task, cursor int, active bool, width int) string {
+func formatTasksSection(tasks []domain.Task, cursor int, active bool, width int) (string, int) {
 	var b strings.Builder
 	b.WriteString(sectionHeader("Tasks", active))
 	b.WriteByte('\n')
+	focusLine := -1
 	if len(tasks) == 0 {
 		b.WriteString(wrapWidth(mutedStyle.Render("  No tasks on this PR."), width))
 		b.WriteByte('\n')
-		return b.String()
+		return b.String(), focusLine
 	}
 	for i, t := range tasks {
 		mark := "[ ]"
@@ -138,6 +139,7 @@ func formatTasksSection(tasks []domain.Task, cursor int, active bool, width int)
 		prefix := "  "
 		if active && i == cursor {
 			prefix = "> "
+			focusLine = strings.Count(b.String(), "\n")
 		}
 		body := strings.TrimSpace(t.Body)
 		head := fmt.Sprintf("%s%s %s", prefix, mark, body)
@@ -154,7 +156,7 @@ func formatTasksSection(tasks []domain.Task, cursor int, active bool, width int)
 		b.WriteString(wrapWidth(head+meta, width))
 		b.WriteByte('\n')
 	}
-	return b.String()
+	return b.String(), focusLine
 }
 
 func sectionHeader(title string, active bool) string {
@@ -165,28 +167,32 @@ func sectionHeader(title string, active bool) string {
 	return mutedStyle.Render("  " + label)
 }
 
-func formatConversationSection(entries []convEntry, cursor int, active bool, width int) string {
+func formatConversationSection(entries []convEntry, cursor int, active bool, width int) (string, int) {
 	var b strings.Builder
 	b.WriteString(wrapWidth(sectionHeader("Conversation", active), width))
 	b.WriteByte('\n')
-	hint := "  tab here · j/k select · R reply · c new"
+	hint := "  tab here · j/k select · R reply · c new · ctrl+d/u scroll"
 	if active {
-		hint = "  j/k select · R reply · c new · space N/A"
+		hint = "  j/k select · ctrl+d/u scroll · R reply · c new"
 	}
 	b.WriteString(wrapWidth(mutedStyle.Render(hint), width))
 	b.WriteByte('\n')
 	b.WriteByte('\n')
+	focusLine := -1
 	if len(entries) == 0 {
 		b.WriteString(wrapWidth(mutedStyle.Render("  No general comments yet. Press c to add a draft."), width))
 		b.WriteByte('\n')
-		return b.String()
+		return b.String(), focusLine
 	}
 	for i, e := range entries {
 		sel := active && i == cursor
+		if sel {
+			focusLine = strings.Count(b.String(), "\n")
+		}
 		b.WriteString(formatConversationEntry(e, sel, width))
 		b.WriteByte('\n')
 	}
-	return b.String()
+	return b.String(), focusLine
 }
 
 func formatSummarySection(summary, summaryErr string, summarizing, active bool, detail string, width int) string {
@@ -229,11 +235,12 @@ func formatOverview(
 	summarizing bool,
 	summaryDetail string,
 	width int,
-) string {
+) (string, int) {
 	if width < 20 {
 		width = 20
 	}
 	var b strings.Builder
+	focusLine := -1
 	title := "Pull request"
 	if pr != nil && pr.Title != "" {
 		title = pr.Title
@@ -247,8 +254,14 @@ func formatOverview(
 	b.WriteByte('\n')
 	b.WriteString(formatReviewsSection(prReviews(pr), width))
 	b.WriteByte('\n')
-	b.WriteString(formatTasksSection(tasks, taskCursor, sec == sectionTasks, width))
+
+	taskBlock, taskFocus := formatTasksSection(tasks, taskCursor, sec == sectionTasks, width)
+	if taskFocus >= 0 {
+		focusLine = strings.Count(b.String(), "\n") + taskFocus
+	}
+	b.WriteString(taskBlock)
 	b.WriteByte('\n')
+
 	b.WriteString(wrapWidth(sectionHeader("Description", sec == sectionDescription), width))
 	b.WriteByte('\n')
 	if strings.TrimSpace(description) == "" {
@@ -263,8 +276,13 @@ func formatOverview(
 	b.WriteByte('\n')
 	b.WriteString(formatSummarySection(summary, summaryErr, summarizing, sec == sectionSummary, summaryDetail, width))
 	b.WriteByte('\n')
-	b.WriteString(formatConversationSection(entries, convCursor, sec == sectionConversation, width))
-	return b.String()
+
+	convBlock, convFocus := formatConversationSection(entries, convCursor, sec == sectionConversation, width)
+	if convFocus >= 0 {
+		focusLine = strings.Count(b.String(), "\n") + convFocus
+	}
+	b.WriteString(convBlock)
+	return b.String(), focusLine
 }
 
 func openTaskCount(tasks []domain.Task) int {

@@ -29,7 +29,7 @@ func TestWrapWidthBreaksLongToken(t *testing.T) {
 func TestFormatTasksSectionWraps(t *testing.T) {
 	body := strings.Repeat("long-task-word ", 30)
 	tasks := []domain.Task{{ID: "1", Body: body, Done: false, Required: true}}
-	out := formatTasksSection(tasks, 0, true, 48)
+	out, _ := formatTasksSection(tasks, 0, true, 48)
 	if maxLineWidth(out) > 48 {
 		t.Fatalf("task section overflows: max=%d\n%s", maxLineWidth(out), out)
 	}
@@ -48,7 +48,7 @@ func TestFormatOverviewNoOverflow(t *testing.T) {
 		Body:     strings.Repeat("implement the feature across modules ", 15),
 		Required: true,
 	}}
-	out := formatOverview(pr, tasks, 0, nil, 0, sectionTasks, "desc", "", "", false, "short", 50)
+	out, _ := formatOverview(pr, tasks, 0, nil, 0, sectionTasks, "desc", "", "", false, "short", 50)
 	if maxLineWidth(out) > 50 {
 		t.Fatalf("overview overflows: max=%d\n%s", maxLineWidth(out), out)
 	}

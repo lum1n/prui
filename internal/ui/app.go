@@ -1328,6 +1328,18 @@ func (m Model) updateOverview(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.bodyVP.LineUp(1)
 				return m, nil
 			}
+		case "ctrl+d", "pgdown":
+			m.bodyVP.HalfPageDown()
+			return m, nil
+		case "ctrl+u", "pgup":
+			m.bodyVP.HalfPageUp()
+			return m, nil
+		case "g", "home":
+			m.bodyVP.GotoTop()
+			return m, nil
+		case "G", "end":
+			m.bodyVP.GotoBottom()
+			return m, nil
 		case " ", "enter":
 			if m.overviewSec != sectionTasks {
 				return m, nil
@@ -2015,11 +2027,38 @@ func (m *Model) renderOverview() {
 	if strings.TrimSpace(m.summary) != "" {
 		sum = renderMarkdown(m.summary, m.width-4)
 	}
-	content := formatOverview(
+	content, focusLine := formatOverview(
 		m.pr, m.tasks, m.taskCursor, entries, m.convCursor, m.overviewSec,
 		desc, sum, m.summaryErr, m.summarizing, m.summaryDetail.String(), m.width-2,
 	)
 	m.bodyVP.SetContent(content)
+	if focusLine >= 0 {
+		m.scrollBodyToLine(focusLine)
+	}
+}
+
+// scrollBodyToLine keeps line visible inside the overview viewport.
+func (m *Model) scrollBodyToLine(line int) {
+	h := m.bodyVP.Height
+	if h <= 0 {
+		return
+	}
+	y := m.bodyVP.YOffset
+	pad := 1
+	if line < y+pad {
+		m.bodyVP.SetYOffset(max(0, line-pad))
+		return
+	}
+	if line >= y+h-pad {
+		m.bodyVP.SetYOffset(max(0, line-h+pad+1))
+	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func renderMarkdown(src string, width int) string {
@@ -2322,9 +2361,9 @@ func (m Model) reviewHelpLine() string {
 		}
 		open := openTaskCount(m.tasks)
 		if m.reviewReadOnly() {
-			return fmt.Sprintf("overview · %s · view only · tab section · j/k · S summarize · s detail · %d open tasks · p/esc back", sec, open)
+			return fmt.Sprintf("overview · %s · view only · tab section · j/k · ctrl+d/u scroll · S summarize · s detail · %d open tasks · p/esc back", sec, open)
 		}
-		return fmt.Sprintf("overview · %s · tab section · j/k · space toggle · S summarize · s detail · R reply · c add · %d open tasks · p/esc back", sec, open)
+		return fmt.Sprintf("overview · %s · tab section · j/k · ctrl+d/u scroll · space toggle · S summarize · s detail · R reply · c add · %d open tasks · p/esc back", sec, open)
 	}
 	if m.commenting {
 		if m.editingID != "" {

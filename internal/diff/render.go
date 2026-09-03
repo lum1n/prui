@@ -243,11 +243,38 @@ func paintHunk(text string, th Theme, width int, selected bool) string {
 	rest := strings.TrimSpace(strings.TrimPrefix(text, "@@"))
 	rest = strings.TrimSpace(strings.TrimSuffix(rest, "@@"))
 	label := " ··· " + rest + " "
-	st := lipgloss.NewStyle().Foreground(th.HunkFg).Background(th.HunkBg)
+	st := lipgloss.NewStyle().Foreground(th.HunkFg).Background(th.HunkBg).
+		Width(width).MaxWidth(width).MaxHeight(1).Inline(true)
 	if selected {
 		st = st.Background(th.SelectedBg)
 	}
-	return st.Width(width).MaxWidth(width).Render(truncate.StringWithTail(label, uint(width), "…"))
+	return st.Render(truncate.StringWithTail(label, uint(width), "…"))
+}
+
+// sanitizeDiffText flattens a source line for single-row display.
+func sanitizeDiffText(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\t", "    ")
+	return s
+}
+
+// fitCell forces s into a single terminal row of exactly width cells.
+// Without Inline/MaxHeight, lipgloss wraps when content (tabs, long lines)
+// exceeds width — which shows up as "double height" diff rows.
+func fitCell(s string, width int, bg lipgloss.Color, bold bool) string {
+	if width < 1 {
+		width = 1
+	}
+	s = truncate.StringWithTail(s, uint(width), "…")
+	st := lipgloss.NewStyle().Width(width).MaxWidth(width).MaxHeight(1).Inline(true)
+	if bg != "" {
+		st = st.Background(bg)
+	}
+	if bold {
+		st = st.Bold(true)
+	}
+	return st.Render(s)
 }
 
 func paintUnified(h *Highlighter, path string, line domain.DiffLine, th Theme, width int, selected bool) string {
@@ -318,9 +345,10 @@ func paintUnified(h *Highlighter, path string, line domain.DiffLine, th Theme, w
 		newG = numStyle.Render(gutterNum(line.NewNumber))
 	}
 
-	code := line.Text
+	raw := sanitizeDiffText(line.Text)
+	code := raw
 	if h != nil {
-		code = h.HighlightLineBG(path, line.Text, rowBg)
+		code = h.HighlightLineBG(path, raw, rowBg)
 	} else if rowBg != "" {
 		code = lipgloss.NewStyle().Background(rowBg).Render(code)
 	}
@@ -341,7 +369,7 @@ func paintUnified(h *Highlighter, path string, line domain.DiffLine, th Theme, w
 	if codeW < 8 {
 		codeW = 8
 	}
-	code = withBG(lipgloss.NewStyle().Width(codeW).MaxWidth(codeW).Bold(selected)).Render(code)
+	code = fitCell(code, codeW, rowBg, selected)
 
 	sepCol := th.SepFg
 	if selected {
@@ -353,7 +381,7 @@ func paintUnified(h *Highlighter, path string, line domain.DiffLine, th Theme, w
 
 	row := oldG + sep + newG + barS + signSt.Render(sign) + gap + code
 
-	st := lipgloss.NewStyle().Width(width).MaxWidth(width)
+	st := lipgloss.NewStyle().Width(width).MaxWidth(width).MaxHeight(1).Inline(true)
 	if rowBg != "" {
 		st = st.Background(rowBg)
 	}
@@ -369,7 +397,7 @@ func paintSplit(h *Highlighter, path string, line domain.DiffLine, th Theme, wid
 	rightW := width - half
 
 	empty := func(w int) string {
-		bg := lipgloss.NewStyle().Width(w).MaxWidth(w)
+		bg := lipgloss.NewStyle().Width(w).MaxWidth(w).MaxHeight(1).Inline(true)
 		if selected {
 			bg = bg.Background(th.SelectedBg)
 		}
@@ -422,6 +450,7 @@ func paintSplit(h *Highlighter, path string, line domain.DiffLine, th Theme, wid
 		if innerW < 4 {
 			innerW = 4
 		}
+		raw = sanitizeDiffText(raw)
 		var body string
 		if h != nil {
 			body = h.HighlightLineBG(path, raw, bg)
@@ -430,9 +459,9 @@ func paintSplit(h *Highlighter, path string, line domain.DiffLine, th Theme, wid
 		} else {
 			body = raw
 		}
-		body = withBG(lipgloss.NewStyle().Width(innerW).MaxWidth(innerW).Bold(selected)).Render(body)
+		body = fitCell(body, innerW, bg, selected)
 		row := g + bar + signS + gap + body
-		st := lipgloss.NewStyle().Width(w).MaxWidth(w)
+		st := lipgloss.NewStyle().Width(w).MaxWidth(w).MaxHeight(1).Inline(true)
 		if bg != "" {
 			st = st.Background(bg)
 		}

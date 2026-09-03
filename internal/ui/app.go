@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/lum1n/prui/internal/ai"
 	"github.com/lum1n/prui/internal/config"
 	"github.com/lum1n/prui/internal/diff"
@@ -2056,6 +2057,7 @@ func (m *Model) layout() {
 	if diffInnerH < 1 {
 		diffInnerH = 1
 	}
+	prevDiffW, prevDiffH := m.diffVP.Width, m.diffVP.Height
 	m.diffVP.Width = diffInnerW
 	m.diffVP.Height = diffInnerH
 	m.bodyVP.Width = m.width
@@ -2074,7 +2076,12 @@ func (m *Model) layout() {
 	}
 	m.bodyVP.Height = bodyH
 	m.comment.SetHeight(3)
-	m.renderDiff()
+	// Only rebuild diff content when the viewport geometry changed — a full
+	// re-center on every layout (resize spam, comment open) was a common
+	// source of the chrome jumping up a couple of rows.
+	if prevDiffW != diffInnerW || prevDiffH != diffInnerH || prevDiffW == 0 {
+		m.renderDiff()
+	}
 }
 
 // splitPanelWidths returns outer left/right widths that always sum to total.
@@ -2122,7 +2129,7 @@ func renderBorderedPanel(sty lipgloss.Style, outerW, outerH int, inner string) s
 	if outerH < 2 {
 		outerH = 2
 	}
-	return sty.Width(outerW - 2).Height(outerH - 2).MaxHeight(outerH).Render(inner)
+	return sty.Width(outerW - 2).Height(outerH - 2).MaxWidth(outerW).MaxHeight(outerH).Render(inner)
 }
 
 func (m *Model) renderOverview() {
@@ -2242,9 +2249,11 @@ func (m *Model) renderDiff() {
 		m.noteDiffLines(elide, -1)
 	}
 	content := b.String()
+	prevY := m.diffVP.YOffset
+	prevTarget := m.contentLineForCursor()
 	m.diffVP.SetContent(content)
 	m.finalizeDiffClickMap(content)
-	m.scrollDiffCursorIntoView()
+	m.scrollDiffCursorIntoView(prevY, prevTarget)
 }
 
 func (m *Model) renderFlatDiff(th diff.Theme, width int) {
@@ -2284,9 +2293,11 @@ func (m *Model) renderFlatDiff(th diff.Theme, width int) {
 		m.noteDiffLines(elide, -1)
 	}
 	content := b.String()
+	prevY := m.diffVP.YOffset
+	prevTarget := m.contentLineForCursor()
 	m.diffVP.SetContent(content)
 	m.finalizeDiffClickMap(content)
-	m.scrollDiffCursorIntoView()
+	m.scrollDiffCursorIntoView(prevY, prevTarget)
 }
 
 // contentLineForCursor returns the first viewport content row for the current
@@ -2348,9 +2359,13 @@ func (m *Model) diffRenderWindow(n, cursor int) (start, end int) {
 	return start, end
 }
 
-// scrollDiffCursorIntoView keeps the selected diff row centered in the
-// viewport (vim zz). Near the top/bottom of the content, SetYOffset clamps.
-func (m *Model) scrollDiffCursorIntoView() {
+// scrollDiffCursorIntoView keeps the selected diff row centered (vim zz).
+// Near the top/bottom of the content, SetYOffset clamps.
+// prevY/prevTarget are retained for call-site clarity (SetContent may clamp
+// YOffset before we run); centering always uses the fresh click-map target.
+func (m *Model) scrollDiffCursorIntoView(prevY, prevTarget int) {
+	_ = prevY
+	_ = prevTarget
 	target := m.contentLineForCursor()
 	if target < 0 {
 		return
@@ -2519,13 +2534,36 @@ func (m Model) View() string {
 	}
 	parts = append(parts, statusBar)
 	out := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	// Pin the frame to the terminal size so a one-row overflow never scrolls
-	// the alt screen (seen as the whole UI jumping / ghosting lines).
-	return lipgloss.NewStyle().
-		MaxWidth(m.width).
-		MaxHeight(m.height).
-		Height(m.height).
-		Render(out)
+	// Hard-scissor to the terminal cell grid. Lipgloss Height does not truncate
+	// on its own; any transient overflow scrolls the alt screen and the whole
+	// UI appears to jump up a couple of lines (tab focus / scroll redraws).
+	return pinFrame(out, m.width, m.height)
+}
+
+// pinFrame forces s into exactly width×height cells (ANSI-aware).
+func pinFrame(s string, width, height int) string {
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" && strings.HasSuffix(s, "\n") {
+		lines = lines[:len(lines)-1]
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for i, ln := range lines {
+		if ansi.StringWidth(ln) > width {
+			lines[i] = ansi.Cut(ln, 0, width)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) reviewHelpLine() string {

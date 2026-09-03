@@ -508,7 +508,12 @@ func PaintAnnotation(author, body string, draft, selected bool, th Theme, width 
 		fg = th.DraftFg
 	}
 	if selected {
+		// Keep the same cell width as the unselected prefix so focus changes
+		// don't reflow/wrap the annotation and shift the viewport.
 		prefix = "     ▸ "
+		if draft {
+			prefix = "     ▸ draft · "
+		}
 	}
 	body = strings.TrimSpace(strings.ReplaceAll(body, "\r\n", "\n"))
 	head := prefix + author + " · "

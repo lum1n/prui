@@ -1842,8 +1842,8 @@ func (m *Model) pageCursor(dir int) {
 	m.nudgeDiffCursor(dir * step)
 }
 
-// nudgeDiffCursor moves the selection by delta lines (clamped), keeping the
-// viewport centered via renderDiff. Used by page keys and mouse wheel.
+// nudgeDiffCursor moves the selection by delta lines (clamped). renderDiff
+// keeps the cursor visible without re-centering every step.
 func (m *Model) nudgeDiffCursor(delta int) {
 	if delta == 0 {
 		return
@@ -2216,16 +2216,10 @@ func (m *Model) renderDiff() {
 		m.noteDiffLines(elide, -1)
 	}
 	content := b.String()
+	prevY := m.diffVP.YOffset
 	m.diffVP.SetContent(content)
 	m.finalizeDiffClickMap(content)
-	m.diffVP.GotoTop()
-	// File header is 3 lines (rules + title).
-	if start == 0 {
-		offset := m.cursorLine + 3 - m.diffVP.Height/2
-		if offset > 0 {
-			m.diffVP.LineDown(offset)
-		}
-	}
+	m.scrollDiffCursorIntoView(prevY)
 }
 
 func (m *Model) renderFlatDiff(th diff.Theme, width int) {
@@ -2276,14 +2270,50 @@ func (m *Model) renderFlatDiff(th diff.Theme, width int) {
 		m.noteDiffLines(elide, -1)
 	}
 	content := b.String()
+	prevY := m.diffVP.YOffset
 	m.diffVP.SetContent(content)
 	m.finalizeDiffClickMap(content)
-	m.diffVP.GotoTop()
-	if start == 0 {
-		offset := m.cursorLine - m.diffVP.Height/2
-		if offset > 0 {
-			m.diffVP.LineDown(offset)
+	m.scrollDiffCursorIntoView(prevY)
+}
+
+// contentLineForCursor returns the first viewport content row for the current
+// cursor (accounts for file headers, threads, and elision markers).
+func (m *Model) contentLineForCursor() int {
+	for i, idx := range m.diffClickMap {
+		if idx == m.cursorLine {
+			return i
 		}
+	}
+	return -1
+}
+
+// scrollDiffCursorIntoView keeps the selected diff row visible without
+// re-centering on every keypress (which caused layout jumps / ghost lines).
+func (m *Model) scrollDiffCursorIntoView(prevY int) {
+	target := m.contentLineForCursor()
+	if target < 0 {
+		return
+	}
+	h := m.diffVP.Height
+	if h <= 0 {
+		return
+	}
+	// Prefer the previous offset so small cursor moves don't jump the viewport.
+	m.diffVP.SetYOffset(prevY)
+	y := m.diffVP.YOffset
+	pad := 2
+	if target < y+pad {
+		m.diffVP.SetYOffset(max(0, target-pad))
+		return
+	}
+	if target >= y+h-pad {
+		m.diffVP.SetYOffset(max(0, target-h+pad+1))
+		return
+	}
+	// First paint / jump from empty: center once when we were at the top and
+	// the cursor sits well below the fold.
+	if prevY == 0 && target > h/2 {
+		m.diffVP.SetYOffset(max(0, target-h/2))
 	}
 }
 
@@ -2309,12 +2339,14 @@ func (m *Model) writeDiffLine(b *strings.Builder, fd *domain.FileDiff, ln domain
 	}
 	nodes := lineThread(m.comments, drafts, fd.Path, ln)
 	selectedID := ""
-	number := false
 	if focus {
 		m.syncThreadTarget()
 		selectedID = m.threadTargetID
-		number = len(replyableIDs(nodes)) > 1
 	}
+	// Always number multi-target threads (not only when focused) so wrapping /
+	// line count stays stable while moving the cursor — unstable height was
+	// shifting the viewport and ghosting lines.
+	number := len(replyableIDs(nodes)) > 1
 	thread := paintThread(nodes, selectedID, number, th, width)
 	b.WriteString(thread)
 	m.noteDiffLines(thread, cursorIdx)
@@ -2442,8 +2474,13 @@ func (m Model) View() string {
 	}
 	parts = append(parts, statusBar)
 	out := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	// Hard clamp so a single mis-sized child never clips terminal borders.
-	return lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(out)
+	// Pin the frame to the terminal size so a one-row overflow never scrolls
+	// the alt screen (seen as the whole UI jumping / ghosting lines).
+	return lipgloss.NewStyle().
+		MaxWidth(m.width).
+		MaxHeight(m.height).
+		Height(m.height).
+		Render(out)
 }
 
 func (m Model) reviewHelpLine() string {

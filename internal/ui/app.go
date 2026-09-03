@@ -1954,17 +1954,8 @@ func (m *Model) layout() {
 	}
 	m.prList.SetSize(m.width, prH)
 
-	leftW := m.width / 3
-	if leftW < 24 {
-		leftW = 24
-	}
-	if leftW > 48 {
-		leftW = 48
-	}
-	rightW := m.width - leftW
-	if rightW < 20 {
-		rightW = 20
-	}
+	// Outer panel widths must sum to terminal width (borders are outside Width()).
+	leftW, rightW := splitPanelWidths(m.width)
 	m.leftWidth = leftW
 	m.rightWidth = rightW
 
@@ -1977,16 +1968,34 @@ func (m *Model) layout() {
 		diffH = 3
 	}
 
-	fileH := contentH - 2 - 1 // panel border + bottom item-count footer
-	if fileH < 3 {
-		fileH = 3
+	// Inner sizes: lipgloss Width/Height are content-box; borders add 2.
+	innerW := leftW - 2
+	if innerW < 8 {
+		innerW = 8
 	}
-	m.fileList.SetSize(leftW-2, fileH)
+	innerH := contentH - 2
+	if innerH < 1 {
+		innerH = 1
+	}
+	fileH := innerH - 1 // list + item-count footer
+	if fileH < 1 {
+		fileH = 1
+	}
+	m.fileList.SetSize(innerW, fileH)
 	if len(m.files) > 0 {
 		m.refreshFileList()
 	}
-	m.diffVP.Width = rightW - 2
-	m.diffVP.Height = diffH - 2
+
+	diffInnerW := rightW - 2
+	if diffInnerW < 8 {
+		diffInnerW = 8
+	}
+	diffInnerH := diffH - 2
+	if diffInnerH < 1 {
+		diffInnerH = 1
+	}
+	m.diffVP.Width = diffInnerW
+	m.diffVP.Height = diffInnerH
 	m.bodyVP.Width = m.width
 	bodyH := contentH
 	if m.screen == screenOverview && m.commenting {
@@ -1996,11 +2005,62 @@ func (m *Model) layout() {
 		}
 		m.comment.SetWidth(m.width - 4)
 	} else {
-		m.comment.SetWidth(rightW - 4)
+		m.comment.SetWidth(diffInnerW - 2)
+		if m.comment.Width() < 10 {
+			m.comment.SetWidth(10)
+		}
 	}
 	m.bodyVP.Height = bodyH
 	m.comment.SetHeight(3)
 	m.renderDiff()
+}
+
+// splitPanelWidths returns outer left/right widths that always sum to total.
+func splitPanelWidths(total int) (left, right int) {
+	if total < 40 {
+		left = total / 3
+		if left < 12 {
+			left = 12
+		}
+	} else {
+		left = total / 3
+		if left < 24 {
+			left = 24
+		}
+		if left > 48 {
+			left = 48
+		}
+	}
+	if left >= total-10 {
+		left = total / 3
+		if left < 1 {
+			left = 1
+		}
+	}
+	right = total - left
+	if right < 10 {
+		right = 10
+		left = total - right
+		if left < 1 {
+			left = 1
+			right = total - left
+		}
+	}
+	return left, right
+}
+
+// renderBorderedPanel draws a bordered box with exact outer dimensions.
+// Lipgloss Width/Height are content-box (borders add 2). Do not set MaxWidth
+// to the content width — that clamps the final box and shrinks the outer
+// width by the border. MaxHeight(outerH) clamps the final box including border.
+func renderBorderedPanel(sty lipgloss.Style, outerW, outerH int, inner string) string {
+	if outerW < 2 {
+		outerW = 2
+	}
+	if outerH < 2 {
+		outerH = 2
+	}
+	return sty.Width(outerW - 2).Height(outerH - 2).MaxHeight(outerH).Render(inner)
 }
 
 func (m *Model) renderOverview() {
@@ -2223,6 +2283,7 @@ func (m Model) View() string {
 	if m.loading {
 		title += mutedStyle.Render("  …")
 	}
+	title = lipgloss.NewStyle().Width(m.width).MaxWidth(m.width).MaxHeight(1).Render(title)
 
 	var body string
 	switch m.screen {
@@ -2237,34 +2298,30 @@ func (m Model) View() string {
 		if m.commenting {
 			labelW := m.rightWidth - 4
 			if labelW < 20 {
-				labelW = 40
+				labelW = 20
 			}
 			label := m.commentEditorLabel(labelW)
 			box := lipgloss.JoinVertical(lipgloss.Left,
-				draftStyle.Width(labelW).Render(label),
+				draftStyle.Width(labelW).MaxWidth(labelW).Render(label),
 				m.comment.View(),
 			)
 			rightInner = lipgloss.JoinVertical(lipgloss.Left, rightInner, box)
 		}
 		lw, rw := m.leftWidth, m.rightWidth
-		if lw == 0 {
-			lw = m.width / 3
+		if lw == 0 || rw == 0 || lw+rw != m.width {
+			lw, rw = splitPanelWidths(m.width)
 		}
-		if rw == 0 {
-			rw = m.width - lw
-		}
-		// Pin panel height so help/status below always keep their rows.
 		panelH := m.contentHeight
 		if panelH < 3 {
 			panelH = 3
 		}
 		var left, right string
 		if m.pane == paneFiles && !m.commenting {
-			left = focusedPanel.Width(lw).Height(panelH).MaxHeight(panelH).Render(leftInner)
-			right = panel.Width(rw).Height(panelH).MaxHeight(panelH).Render(rightInner)
+			left = renderBorderedPanel(focusedPanel, lw, panelH, leftInner)
+			right = renderBorderedPanel(panel, rw, panelH, rightInner)
 		} else {
-			left = panel.Width(lw).Height(panelH).MaxHeight(panelH).Render(leftInner)
-			right = focusedPanel.Width(rw).Height(panelH).MaxHeight(panelH).Render(rightInner)
+			left = renderBorderedPanel(panel, lw, panelH, leftInner)
+			right = renderBorderedPanel(focusedPanel, rw, panelH, rightInner)
 		}
 		body = lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	case screenSubmit:
@@ -2312,17 +2369,17 @@ func (m Model) View() string {
 	} else if status == "" && m.screen == screenPRList {
 		status = listCountLabel(m.prList)
 	}
-	statusBar := statusStyle.Width(m.width).Render(truncate(status, m.width))
+	statusBar := statusStyle.Width(m.width).MaxWidth(m.width).MaxHeight(1).Render(truncate(status, m.width))
 
 	helpH := 0
 	var helpBar string
 	switch m.screen {
 	case screenReview, screenSubmit, screenOverview:
 		helpH = 1
-		helpBar = helpBarStyle.Width(m.width).Render(truncate(m.reviewHelpLine(), m.width))
+		helpBar = helpBarStyle.Width(m.width).MaxWidth(m.width).MaxHeight(1).Render(truncate(m.reviewHelpLine(), m.width))
 	case screenPRList:
 		helpH = 1
-		helpBar = helpBarStyle.Width(m.width).Render(truncate(prListHelpLine(), m.width))
+		helpBar = helpBarStyle.Width(m.width).MaxWidth(m.width).MaxHeight(1).Render(truncate(prListHelpLine(), m.width))
 	}
 
 	// Title + help + status are fixed chrome; body fills the rest.
@@ -2339,7 +2396,9 @@ func (m Model) View() string {
 		parts = append(parts, helpBar)
 	}
 	parts = append(parts, statusBar)
-	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+	out := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	// Hard clamp so a single mis-sized child never clips terminal borders.
+	return lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(out)
 }
 
 func (m Model) reviewHelpLine() string {

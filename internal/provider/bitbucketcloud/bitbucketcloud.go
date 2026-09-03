@@ -221,6 +221,42 @@ func (c *Client) getFromFullDiff(ctx context.Context, ref domain.PRRef, path str
 	return nil, fmt.Errorf("file %q not found in diff", path)
 }
 
+func (c *Client) GetFileContent(ctx context.Context, ref domain.PRRef, path, sha string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("empty path")
+	}
+	if sha == "" {
+		return "", fmt.Errorf("empty commit sha")
+	}
+	// GET /2.0/repositories/{workspace}/{repo}/src/{commit}/{path}
+	u := fmt.Sprintf("%s/repositories/%s/%s/src/%s/%s",
+		c.api,
+		url.PathEscape(ref.Repo.Owner),
+		url.PathEscape(ref.Repo.Name),
+		url.PathEscape(sha),
+		encodeSrcPath(path),
+	)
+	hdr := c.headers()
+	hdr["Accept"] = "text/plain"
+	data, code, err := httputil.DoRaw(ctx, c.http, http.MethodGet, u, hdr, nil)
+	if err != nil {
+		return "", err
+	}
+	if code >= 300 {
+		return "", fmt.Errorf("get file content: HTTP %d", code)
+	}
+	return string(data), nil
+}
+
+// encodeSrcPath keeps slashes; escapes each segment for the src API.
+func encodeSrcPath(path string) string {
+	parts := strings.Split(path, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return strings.Join(parts, "/")
+}
+
 func (c *Client) ListComments(ctx context.Context, ref domain.PRRef) ([]domain.Comment, error) {
 	u := c.prURL(ref, "comments?pagelen=100")
 	var page struct {

@@ -6,6 +6,8 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/lum1n/prui/internal/diff"
 )
 
 const mouseWheelLines = 3
@@ -41,8 +43,7 @@ func (m Model) handleReviewMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if m.leftWidth > 0 && msg.X < m.leftWidth {
 			return m, m.clickFileList(bodyY)
 		}
-		m.clickDiff(bodyY)
-		return m, nil
+		return m.clickDiff(bodyY)
 	}
 	return m, nil
 }
@@ -140,25 +141,34 @@ func (m *Model) clickFileList(bodyY int) tea.Cmd {
 	return nil
 }
 
-func (m *Model) clickDiff(bodyY int) {
+func (m Model) clickDiff(bodyY int) (tea.Model, tea.Cmd) {
 	if m.fileDiff == nil && !(m.showAll && len(m.flat) > 0) {
 		m.pane = paneDiff
-		return
+		return m, nil
 	}
 	m.pane = paneDiff
 	localY := bodyY - 1 // top border
 	if localY < 0 || localY >= m.diffVP.Height {
-		return
+		return m, nil
 	}
 	line := localY + m.diffVP.YOffset
 	if line < 0 || line >= len(m.diffClickMap) {
-		return
+		return m, nil
 	}
 	idx := m.diffClickMap[line]
 	if idx < 0 {
-		return
+		return m, nil
 	}
 	m.jumpToDiffLine(idx)
+	fd, lineIdx, ok := m.diffLineAtCursor()
+	if !ok {
+		return m, nil
+	}
+	ln := fd.Lines[lineIdx]
+	if diff.ExpandableGap(ln) || ln.Expanded {
+		return m.toggleGapAtCursor()
+	}
+	return m, nil
 }
 
 func (m *Model) jumpToDiffLine(idx int) {

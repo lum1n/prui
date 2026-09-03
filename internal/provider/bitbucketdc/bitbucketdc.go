@@ -195,6 +195,27 @@ func (c *Client) GetFileDiff(ctx context.Context, ref domain.PRRef, path string)
 	return nil, fmt.Errorf("diff %s: %w", path, errors.Join(errs...))
 }
 
+func (c *Client) GetFileContent(ctx context.Context, ref domain.PRRef, path, sha string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("empty path")
+	}
+	if sha == "" {
+		return "", fmt.Errorf("empty commit sha")
+	}
+	// GET .../repos/{slug}/raw/{path}?at={commit}
+	u := fmt.Sprintf("%s/raw/%s?at=%s", c.repoPath(ref.Repo), encodeDiffPath(path), url.QueryEscape(sha))
+	hdr := c.headers()
+	hdr["Accept"] = "text/plain"
+	data, code, err := httputil.DoRaw(ctx, c.http, http.MethodGet, u, hdr, nil)
+	if err != nil {
+		return "", err
+	}
+	if code >= 300 {
+		return "", fmt.Errorf("get file content: HTTP %d", code)
+	}
+	return string(data), nil
+}
+
 func diffURLs(prBase, path string) []string {
 	q := encodeDiffQueryPath(path)
 	p := encodeDiffPath(path)

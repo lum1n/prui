@@ -115,14 +115,16 @@ type Model struct {
 	contentHeight  int
 	diffClickMap   []int // viewport content line → cursor index (-1 = non-selectable)
 
-	diffCache map[string]*domain.FileDiff
-	flat      []flatRow
-	allGen    int // bumps to cancel in-flight all-file loads
+	diffCache        map[string]*domain.FileDiff
+	flat             []flatRow
+	allGen           int // bumps to cancel in-flight all-file loads
+	fileContentCache map[string]string           // path → head file text
+	gapHeaders       map[string]domain.DiffLine // gapKey → collapsed header
 
-	summary      string
-	summaryErr   string
-	summarizing  bool
-	summaryGen   int // bumps to ignore stale summarize results
+	summary       string
+	summaryErr    string
+	summarizing   bool
+	summaryGen    int // bumps to ignore stale summarize results
 	summaryDetail ai.DetailLevel
 }
 
@@ -205,7 +207,9 @@ func NewModel(opts Options) Model {
 		loading:    true,
 		splitDiff:  opts.Config != nil && opts.Config.UI.Diff == "split",
 		showAll:    opts.Config != nil && opts.Config.UI.Files == "all",
-		diffCache:  map[string]*domain.FileDiff{},
+		diffCache:        map[string]*domain.FileDiff{},
+		fileContentCache: map[string]string{},
+		gapHeaders:       map[string]domain.DiffLine{},
 	}
 	if opts.Config != nil {
 		m.summaryDetail = ai.ParseDetailLevel(opts.Config.AI.SummaryDetail)
@@ -223,7 +227,7 @@ const defaultHelp = `Keys
   ctrl+d/u  page down / page up (half screen)
   tab       PR list: next tab · review: switch pane
   ←/→       PR list: switch Open / Drafts / Merged
-  enter     open PR / load file
+  enter     open PR / load file · expand/collapse omitted lines
   c         new comment on line (not on merged)
   R         reply to selected comment (diff: ▸ target · overview conversation)
   ,/.       prev/next reply target on line
@@ -240,6 +244,7 @@ const defaultHelp = `Keys
   d         toggle unified/split layout
   a         toggle this-file / all-files view
   [ ]       prev/next hunk
+  enter     expand/collapse omitted unchanged lines (on ··· gap)
   o         show PR URL in status
   O         open PR in browser
   ?         help
@@ -396,6 +401,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.session = msg.session
 		m.screen = screenReview
 		m.diffCache = map[string]*domain.FileDiff{}
+		m.fileContentCache = map[string]string{}
+		m.gapHeaders = map[string]domain.DiffLine{}
 		m.flat = nil
 		m.summary = ""
 		m.summaryErr = ""
@@ -457,6 +464,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout()
 		m.renderDiff()
 		return m, nil
+
+	case loadedGapContentMsg:
+		return m.handleLoadedGapContent(msg)
 
 	case loadedAllDiffsMsg:
 		if msg.gen != m.allGen || !m.showAll {
@@ -888,6 +898,8 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.pane == paneDiff && (m.fileDiff != nil || (m.showAll && len(m.flat) > 0)) {
 			switch msg.String() {
+			case "enter":
+				return m.toggleGapAtCursor()
 			case "j", "down":
 				m.moveCursor(1)
 				return m, nil
@@ -2480,14 +2492,25 @@ func (m Model) reviewHelpLine() string {
 	}
 	open := openTaskCount(m.tasks)
 	nConv := len(conversationComments(m.comments))
+	if fd, li, ok := m.diffLineAtCursor(); ok && m.pane == paneDiff {
+		ln := fd.Lines[li]
+		if diff.ExpandableGap(ln) {
+			return fmt.Sprintf("enter expand %d lines · tab pane(%s) · j/k · [/] hunk · a %s · d %s · ? · q",
+				ln.GapBefore, pane, view, layout)
+		}
+		if ln.Expanded {
+			return fmt.Sprintf("enter collapse · tab pane(%s) · j/k · [/] hunk · a %s · d %s · ? · q",
+				pane, view, layout)
+		}
+	}
 	if m.reviewReadOnly() {
 		return fmt.Sprintf(
-			"tab pane(%s) · j/k · ^d/^u · [/] hunk · y yank · a %s · d %s · p overview(%d/%d) · S summarize · s detail · O open · view only · ? · q",
+			"tab pane(%s) · j/k · ^d/^u · [/] hunk · enter expand · y yank · a %s · d %s · p overview(%d/%d) · S summarize · s detail · O open · view only · ? · q",
 			pane, view, layout, open, nConv,
 		)
 	}
 	return fmt.Sprintf(
-		"tab pane(%s) · j/k · ^d/^u · [/] hunk · c comment · ,/.|# target · R reply · e edit · x del · v range · y yank · a %s · d %s · p overview(%d/%d) · S summarize · s detail · r submit · O open · ? · q",
+		"tab pane(%s) · j/k · ^d/^u · [/] hunk · enter expand · c comment · ,/.|# target · R reply · e edit · x del · v range · y yank · a %s · d %s · p overview(%d/%d) · S summarize · s detail · r submit · O open · ? · q",
 		pane, view, layout, open, nConv,
 	)
 }

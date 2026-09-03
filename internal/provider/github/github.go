@@ -174,6 +174,27 @@ func (c *Client) GetFileDiff(ctx context.Context, ref domain.PRRef, path string)
 	return nil, fmt.Errorf("file %q not in pull request", path)
 }
 
+func (c *Client) GetFileContent(ctx context.Context, ref domain.PRRef, path, sha string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("empty path")
+	}
+	if sha == "" {
+		return "", fmt.Errorf("empty commit sha")
+	}
+	fc, _, _, err := c.gh.Repositories.GetContents(ctx, ref.Repo.Owner, ref.Repo.Name, path, &github.RepositoryContentGetOptions{Ref: sha})
+	if err != nil {
+		return "", err
+	}
+	if fc == nil {
+		return "", fmt.Errorf("%q is not a file at %s", path, sha)
+	}
+	content, err := fc.GetContent()
+	if err != nil {
+		return "", err
+	}
+	return content, nil
+}
+
 func (c *Client) ListComments(ctx context.Context, ref domain.PRRef) ([]domain.Comment, error) {
 	var out []domain.Comment
 

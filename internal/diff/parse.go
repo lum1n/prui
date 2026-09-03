@@ -31,6 +31,7 @@ func ParseUnified(pathHint, patch string) (*domain.FileDiff, error) {
 		oldLine, newLine int
 		hunkIdx          = -1
 		inHunk           bool
+		lastNew int // last assigned new-side line number (0 = none yet)
 	)
 
 	for sc.Scan() {
@@ -75,12 +76,32 @@ func ParseUnified(pathHint, patch string) (*domain.FileDiff, error) {
 			}
 			hunkIdx++
 			inHunk = true
-			oldLine, _ = strconv.Atoi(m[1])
-			newLine, _ = strconv.Atoi(m[3])
+			oldStart, _ := strconv.Atoi(m[1])
+			newStart, _ := strconv.Atoi(m[3])
+			oldLine, newLine = oldStart, newStart
+			nextExpected := 1
+			if lastNew > 0 {
+				nextExpected = lastNew + 1
+			}
+			gapBefore := newStart - nextExpected
+			if gapBefore < 0 {
+				gapBefore = 0
+			}
+			gapFrom := 0
+			gapTo := 0
+			if gapBefore > 0 {
+				gapFrom = nextExpected
+				gapTo = newStart
+			}
 			fd.Lines = append(fd.Lines, domain.DiffLine{
 				Kind:      domain.LineContext,
 				Text:      line,
+				OldNumber: oldStart,
+				NewNumber: newStart,
 				HunkIndex: hunkIdx,
+				GapBefore: gapBefore,
+				GapFrom:   gapFrom,
+				GapTo:     gapTo,
 			})
 		case !inHunk:
 			continue
@@ -99,6 +120,7 @@ func ParseUnified(pathHint, patch string) (*domain.FileDiff, error) {
 				HunkIndex: hunkIdx,
 				Anchor:    anchor,
 			})
+			lastNew = newLine
 			newLine++
 		case strings.HasPrefix(line, "-"):
 			text := trimPrefixOne(line, "-")
@@ -144,6 +166,7 @@ func ParseUnified(pathHint, patch string) (*domain.FileDiff, error) {
 				HunkIndex: hunkIdx,
 				Anchor:    anchor,
 			})
+			lastNew = newLine
 			oldLine++
 			newLine++
 		}

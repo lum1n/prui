@@ -231,7 +231,7 @@ func Paint(h *Highlighter, path string, line domain.DiffLine, opt Options) strin
 		width = 80
 	}
 	if IsHunkHeader(line) {
-		return paintHunk(line.Text, th, width, opt.Selected)
+		return paintHunk(line, th, width, opt.Selected)
 	}
 	if opt.Split {
 		return paintSplit(h, path, line, th, width, opt.Selected)
@@ -239,16 +239,32 @@ func Paint(h *Highlighter, path string, line domain.DiffLine, opt Options) strin
 	return paintUnified(h, path, line, th, width, opt.Selected)
 }
 
-func paintHunk(text string, th Theme, width int, selected bool) string {
-	rest := strings.TrimSpace(strings.TrimPrefix(text, "@@"))
-	rest = strings.TrimSpace(strings.TrimSuffix(rest, "@@"))
-	label := " ··· " + rest + " "
+func paintHunk(line domain.DiffLine, th Theme, width int, selected bool) string {
+	label := HunkGapLabel(line)
 	st := lipgloss.NewStyle().Foreground(th.HunkFg).Background(th.HunkBg).
 		Width(width).MaxWidth(width).MaxHeight(1).Inline(true)
 	if selected {
 		st = st.Background(th.SelectedBg)
 	}
 	return st.Render(truncate.StringWithTail(label, uint(width), "…"))
+}
+
+// HunkGapLabel returns the display text for a hunk / gap row.
+func HunkGapLabel(line domain.DiffLine) string {
+	if line.GapBefore > 0 && line.GapFrom > 0 && line.GapTo > line.GapFrom {
+		n := line.GapBefore
+		unit := "lines"
+		if n == 1 {
+			unit = "line"
+		}
+		return fmt.Sprintf(" ··· %d unchanged %s (%d–%d) ··· ", n, unit, line.GapFrom, line.GapTo-1)
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(line.Text, "@@"))
+	rest = strings.TrimSpace(strings.TrimSuffix(rest, "@@"))
+	if rest == "" {
+		return " ··· "
+	}
+	return " ··· " + rest + " "
 }
 
 // sanitizeDiffText flattens a source line for single-row display.

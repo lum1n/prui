@@ -13,6 +13,8 @@ type Host interface {
 	GetPullRequest(ctx context.Context, ref domain.PRRef) (*domain.PullRequest, error)
 	ListFiles(ctx context.Context, ref domain.PRRef) ([]domain.FileChange, error)
 	GetFileDiff(ctx context.Context, ref domain.PRRef, path string) (*domain.FileDiff, error)
+	// GetFileContent returns the file text at sha (usually the PR head commit).
+	GetFileContent(ctx context.Context, ref domain.PRRef, path, sha string) (string, error)
 	ListComments(ctx context.Context, ref domain.PRRef) ([]domain.Comment, error)
 	ListTasks(ctx context.Context, ref domain.PRRef) ([]domain.Task, error)
 	SetTaskDone(ctx context.Context, ref domain.PRRef, taskID string, done bool) error

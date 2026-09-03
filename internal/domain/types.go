@@ -196,11 +196,19 @@ type Anchor struct {
 // DiffLine is one rendered line of a parsed unified diff.
 type DiffLine struct {
 	Kind      LineType
-	OldNumber int // 0 if none
-	NewNumber int // 0 if none
+	OldNumber int // 0 if none; on hunk headers: old hunk start
+	NewNumber int // 0 if none; on hunk headers: new hunk start
 	Text      string
 	HunkIndex int
 	Anchor    Anchor
+	// GapBefore is set on hunk headers: number of omitted new-side lines
+	// before this hunk. GapFrom/GapTo are the half-open new-line range
+	// [GapFrom, GapTo) that was skipped (GapTo == NewNumber).
+	GapBefore int
+	GapFrom   int
+	GapTo     int
+	// Expanded marks context lines spliced in by expanding a hunk gap.
+	Expanded bool
 }
 
 // FileDiff is a fully parsed file-level diff.

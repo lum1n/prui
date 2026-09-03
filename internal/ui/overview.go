@@ -26,7 +26,7 @@ func (s overviewSection) prev() overviewSection {
 	return overviewSection((int(s) + int(overviewSectionCount) - 1) % int(overviewSectionCount))
 }
 
-func formatPRStatus(pr *domain.PullRequest, tasks []domain.Task) string {
+func formatPRStatus(pr *domain.PullRequest, tasks []domain.Task, width int) string {
 	if pr == nil {
 		return mutedStyle.Render("no pull request")
 	}
@@ -66,7 +66,7 @@ func formatPRStatus(pr *domain.PullRequest, tasks []domain.Task) string {
 	if badge := formatReviewBadge(pr.Reviews); badge != "" {
 		out += mutedStyle.Render(" · ") + badge
 	}
-	return out
+	return wrapWidth(out, width)
 }
 
 // formatReviewBadge is a short badge for lists/status: "✓3 ✗1 you✓" with color.
@@ -97,31 +97,25 @@ func formatReviewsSection(rs domain.ReviewStatus, width int) string {
 	b.WriteString(sectionHeader("Reviews", false))
 	b.WriteByte('\n')
 	if !rs.HasReviews() && rs.ViewerDecision == domain.DecisionNone {
-		b.WriteString(mutedStyle.Render("  No approvals or change requests yet."))
+		b.WriteString(wrapWidth(mutedStyle.Render("  No approvals or change requests yet."), width))
 		b.WriteByte('\n')
 		return b.String()
 	}
 	if rs.ViewerDecision == domain.DecisionApproved {
-		b.WriteString(draftStyle.Render("  You approved this PR."))
+		b.WriteString(wrapWidth(draftStyle.Render("  You approved this PR."), width))
 		b.WriteByte('\n')
 	} else if rs.ViewerDecision == domain.DecisionChangesRequested {
-		b.WriteString(errorStyle.Render("  You requested changes."))
+		b.WriteString(wrapWidth(errorStyle.Render("  You requested changes."), width))
 		b.WriteByte('\n')
 	}
 	if len(rs.Approvers) > 0 {
 		line := "  Approved: " + strings.Join(rs.Approvers, ", ")
-		if width > 4 {
-			line = truncate(line, width)
-		}
-		b.WriteString(line)
+		b.WriteString(wrapWidth(line, width))
 		b.WriteByte('\n')
 	}
 	if len(rs.ChangeRequesters) > 0 {
 		line := "  Changes requested: " + strings.Join(rs.ChangeRequesters, ", ")
-		if width > 4 {
-			line = truncate(line, width)
-		}
-		b.WriteString(errorStyle.Render(line))
+		b.WriteString(wrapWidth(errorStyle.Render(line), width))
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -132,7 +126,7 @@ func formatTasksSection(tasks []domain.Task, cursor int, active bool, width int)
 	b.WriteString(sectionHeader("Tasks", active))
 	b.WriteByte('\n')
 	if len(tasks) == 0 {
-		b.WriteString(mutedStyle.Render("  No tasks on this PR."))
+		b.WriteString(wrapWidth(mutedStyle.Render("  No tasks on this PR."), width))
 		b.WriteByte('\n')
 		return b.String()
 	}
@@ -145,23 +139,19 @@ func formatTasksSection(tasks []domain.Task, cursor int, active bool, width int)
 		if active && i == cursor {
 			prefix = "> "
 		}
-		req := ""
-		if t.Required && !t.Done {
-			req = mutedStyle.Render(" · required")
-		}
-		author := ""
-		if t.Author != "" {
-			author = mutedStyle.Render(" · " + t.Author)
-		}
-		line := fmt.Sprintf("%s%s %s%s%s", prefix, mark, strings.TrimSpace(t.Body), author, req)
-		if width > 4 {
-			line = truncate(line, width)
-		}
+		body := strings.TrimSpace(t.Body)
+		head := fmt.Sprintf("%s%s %s", prefix, mark, body)
 		if active && i == cursor {
-			b.WriteString(draftStyle.Render(line))
-		} else {
-			b.WriteString(line)
+			head = draftStyle.Render(head)
 		}
+		meta := ""
+		if t.Author != "" {
+			meta += mutedStyle.Render(" · " + t.Author)
+		}
+		if t.Required && !t.Done {
+			meta += mutedStyle.Render(" · required")
+		}
+		b.WriteString(wrapWidth(head+meta, width))
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -177,18 +167,17 @@ func sectionHeader(title string, active bool) string {
 
 func formatConversationSection(entries []convEntry, cursor int, active bool, width int) string {
 	var b strings.Builder
-	b.WriteString(sectionHeader("Conversation", active))
+	b.WriteString(wrapWidth(sectionHeader("Conversation", active), width))
 	b.WriteByte('\n')
-	if !active {
-		b.WriteString(mutedStyle.Render("  tab here · j/k select · R reply · c new"))
-		b.WriteByte('\n')
-	} else {
-		b.WriteString(mutedStyle.Render("  j/k select · R reply · c new · space N/A"))
-		b.WriteByte('\n')
+	hint := "  tab here · j/k select · R reply · c new"
+	if active {
+		hint = "  j/k select · R reply · c new · space N/A"
 	}
+	b.WriteString(wrapWidth(mutedStyle.Render(hint), width))
+	b.WriteByte('\n')
 	b.WriteByte('\n')
 	if len(entries) == 0 {
-		b.WriteString(mutedStyle.Render("  No general comments yet. Press c to add a draft."))
+		b.WriteString(wrapWidth(mutedStyle.Render("  No general comments yet. Press c to add a draft."), width))
 		b.WriteByte('\n')
 		return b.String()
 	}
@@ -200,26 +189,26 @@ func formatConversationSection(entries []convEntry, cursor int, active bool, wid
 	return b.String()
 }
 
-func formatSummarySection(summary, summaryErr string, summarizing, active bool, detail string) string {
+func formatSummarySection(summary, summaryErr string, summarizing, active bool, detail string, width int) string {
 	var b strings.Builder
 	title := "Summary"
 	if detail != "" {
 		title = "Summary · " + detail
 	}
-	b.WriteString(sectionHeader(title, active))
+	b.WriteString(wrapWidth(sectionHeader(title, active), width))
 	b.WriteByte('\n')
 	switch {
 	case summarizing:
-		b.WriteString(mutedStyle.Render("  Summarizing (" + detail + ")…"))
+		b.WriteString(wrapWidth(mutedStyle.Render("  Summarizing ("+detail+")…"), width))
 		b.WriteByte('\n')
 	case summaryErr != "":
-		b.WriteString(errorStyle.Render("  " + summaryErr))
+		b.WriteString(wrapWidth(errorStyle.Render("  "+summaryErr), width))
 		b.WriteByte('\n')
 	case strings.TrimSpace(summary) == "":
-		b.WriteString(mutedStyle.Render("  Press S to summarize · s cycles detail (short/medium/full)"))
+		b.WriteString(wrapWidth(mutedStyle.Render("  Press S to summarize · s cycles detail (short/medium/full)"), width))
 		b.WriteByte('\n')
 	default:
-		b.WriteString(summary)
+		b.WriteString(wrapWidth(summary, width))
 		if !strings.HasSuffix(summary, "\n") {
 			b.WriteByte('\n')
 		}
@@ -241,38 +230,38 @@ func formatOverview(
 	summaryDetail string,
 	width int,
 ) string {
-	if width < 40 {
-		width = 40
+	if width < 20 {
+		width = 20
 	}
 	var b strings.Builder
 	title := "Pull request"
 	if pr != nil && pr.Title != "" {
 		title = pr.Title
 	}
-	b.WriteString(titleStyle.Render(title))
+	b.WriteString(wrapWidth(titleStyle.Render(title), width))
 	b.WriteByte('\n')
-	b.WriteString(formatPRStatus(pr, tasks))
+	b.WriteString(formatPRStatus(pr, tasks, width))
 	b.WriteByte('\n')
-	b.WriteString(mutedStyle.Render("tab section · S summarize · s detail · esc back"))
+	b.WriteString(wrapWidth(mutedStyle.Render("tab section · S summarize · s detail · esc back"), width))
 	b.WriteByte('\n')
 	b.WriteByte('\n')
 	b.WriteString(formatReviewsSection(prReviews(pr), width))
 	b.WriteByte('\n')
 	b.WriteString(formatTasksSection(tasks, taskCursor, sec == sectionTasks, width))
 	b.WriteByte('\n')
-	b.WriteString(sectionHeader("Description", sec == sectionDescription))
+	b.WriteString(wrapWidth(sectionHeader("Description", sec == sectionDescription), width))
 	b.WriteByte('\n')
 	if strings.TrimSpace(description) == "" {
-		b.WriteString(mutedStyle.Render("  (no description)"))
+		b.WriteString(wrapWidth(mutedStyle.Render("  (no description)"), width))
 		b.WriteByte('\n')
 	} else {
-		b.WriteString(description)
+		b.WriteString(wrapWidth(description, width))
 		if !strings.HasSuffix(description, "\n") {
 			b.WriteByte('\n')
 		}
 	}
 	b.WriteByte('\n')
-	b.WriteString(formatSummarySection(summary, summaryErr, summarizing, sec == sectionSummary, summaryDetail))
+	b.WriteString(formatSummarySection(summary, summaryErr, summarizing, sec == sectionSummary, summaryDetail, width))
 	b.WriteByte('\n')
 	b.WriteString(formatConversationSection(entries, convCursor, sec == sectionConversation, width))
 	return b.String()

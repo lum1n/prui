@@ -1760,20 +1760,22 @@ func (m *Model) replyTargetLabel(width int) string {
 		maxSnippet = 20
 	}
 	snippet = truncate(snippet, maxSnippet)
-	return head + "\n  “" + snippet + "”  (enter save · esc cancel)"
+	return wrapWidth(head+"\n  “"+snippet+"”  (enter save · esc cancel)", width)
 }
 
 func (m *Model) commentEditorLabel(width int) string {
-	if m.editingID != "" {
-		return "✎ edit draft" + anchorHint(m.selectedAnchor()) + "  (enter save · esc cancel)"
-	}
-	if m.replyParentID != "" {
+	var label string
+	switch {
+	case m.editingID != "":
+		label = "✎ edit draft" + anchorHint(m.selectedAnchor()) + "  (enter save · esc cancel)"
+	case m.replyParentID != "":
 		return m.replyTargetLabel(width)
+	case m.commentGeneral:
+		label = "✎ general comment  (enter save · esc cancel)"
+	default:
+		label = "✎ comment" + anchorHint(m.selectedAnchor()) + "  (enter save · esc cancel)"
 	}
-	if m.commentGeneral {
-		return "✎ general comment  (enter save · esc cancel)"
-	}
-	return "✎ comment" + anchorHint(m.selectedAnchor()) + "  (enter save · esc cancel)"
+	return wrapWidth(label, width)
 }
 
 func (m *Model) moveCursor(delta int) {

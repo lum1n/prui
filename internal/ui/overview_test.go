@@ -10,7 +10,7 @@ import (
 func TestFormatPRStatus(t *testing.T) {
 	pr := &domain.PullRequest{State: "open", Draft: true}
 	tasks := []domain.Task{{Body: "a", Required: true, Done: false}}
-	out := formatPRStatus(pr, tasks)
+	out := formatPRStatus(pr, tasks, 80)
 	for _, part := range []string{"open", "draft", "blocked"} {
 		if !strings.Contains(out, part) {
 			t.Fatalf("missing %q in %q", part, out)

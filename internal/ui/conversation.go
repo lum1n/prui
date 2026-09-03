@@ -38,17 +38,17 @@ func generalDrafts(drafts []domain.DraftComment) []domain.DraftComment {
 }
 
 func formatConversation(entries []convEntry, cursor int, width int) string {
-	if width < 40 {
-		width = 40
+	if width < 20 {
+		width = 20
 	}
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Conversation"))
+	b.WriteString(wrapWidth(titleStyle.Render("Conversation"), width))
 	b.WriteString("\n")
-	b.WriteString(mutedStyle.Render("Threads · j/k select · R reply · c new"))
+	b.WriteString(wrapWidth(mutedStyle.Render("Threads · j/k select · R reply · c new"), width))
 	b.WriteString("\n\n")
 
 	if len(entries) == 0 {
-		b.WriteString(mutedStyle.Render("No general comments yet. Press c to add a draft."))
+		b.WriteString(wrapWidth(mutedStyle.Render("No general comments yet. Press c to add a draft."), width))
 		b.WriteByte('\n')
 		return b.String()
 	}
@@ -79,20 +79,27 @@ func formatConversationEntry(e convEntry, selected bool, width int) string {
 	if selected {
 		prefix = "> "
 	}
-	header := prefix + indent + branch + meta
-	bodyWidth := width - 2 - len(indent) - len(prefix)
-	if bodyWidth < 20 {
-		bodyWidth = 20
+	header := wrapWidth(prefix+indent+branch+meta, width)
+	bodyWidth := width - 2 - len(indent)
+	if bodyWidth < 12 {
+		bodyWidth = 12
 	}
-	wrapped := lipgloss.NewStyle().Width(bodyWidth).Render(strings.TrimSpace(e.Body))
+	wrapped := wrapWidth(strings.TrimSpace(e.Body), bodyWidth)
 	// Indent wrapped body under the header.
 	bodyLines := strings.Split(wrapped, "\n")
 	for i := range bodyLines {
 		bodyLines[i] = "  " + indent + bodyLines[i]
 	}
-	sep := mutedStyle.Render(strings.Repeat("─", min(width, 48)))
+	ruleW := width
+	if ruleW > 48 {
+		ruleW = 48
+	}
+	if ruleW < 8 {
+		ruleW = 8
+	}
+	sep := mutedStyle.Render(strings.Repeat("─", ruleW))
 	if selected {
-		sep = lipgloss.NewStyle().Foreground(lipgloss.Color("#e6c07b")).Render(strings.Repeat("─", min(width, 48)))
+		sep = lipgloss.NewStyle().Foreground(lipgloss.Color("#c8a35a")).Render(strings.Repeat("─", ruleW))
 	}
 	return fmt.Sprintf("%s\n%s\n%s\n", header, strings.Join(bodyLines, "\n"), sep)
 }

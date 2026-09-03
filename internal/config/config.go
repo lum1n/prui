@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/viper"
 	"github.com/lum1n/prui/internal/domain"
+	"github.com/spf13/viper"
 )
 
 // Config is the loaded application configuration.
@@ -29,13 +29,13 @@ type AIConfig struct {
 
 // AIProvider is one named completer entry under ai.providers.
 type AIProvider struct {
-	Kind        string `mapstructure:"kind"` // claude | copilot | codex | opencode
-	Model       string `mapstructure:"model"`
-	TokenEnv    string `mapstructure:"token_env"`
-	APIURL      string `mapstructure:"api_url"`      // Copilot: GitHub API base (cloud or GHE)
-	BaseURL     string `mapstructure:"base_url"`     // Claude: Anthropic API override
-	GitHubHost  string `mapstructure:"github_host"`  // Copilot: name of hosts[] entry
-	Binary      string `mapstructure:"binary"`       // CLI path override (codex/opencode)
+	Kind       string `mapstructure:"kind"` // claude | copilot | codex | opencode
+	Model      string `mapstructure:"model"`
+	TokenEnv   string `mapstructure:"token_env"`
+	APIURL     string `mapstructure:"api_url"`     // Copilot: GitHub API base (cloud or GHE)
+	BaseURL    string `mapstructure:"base_url"`    // Claude: Anthropic API override
+	GitHubHost string `mapstructure:"github_host"` // Copilot: name of hosts[] entry
+	Binary     string `mapstructure:"binary"`      // CLI path override (codex/opencode)
 	// OAuthClientID enables native device login for this Copilot API host.
 	OAuthClientID     string `mapstructure:"oauth_client_id"`
 	OAuthClientSecret string `mapstructure:"oauth_client_secret"`
@@ -64,9 +64,10 @@ type Defaults struct {
 
 // UIConfig controls TUI presentation.
 type UIConfig struct {
-	Diff  string `mapstructure:"diff"`  // unified | split
-	Files string `mapstructure:"files"` // selected | all
-	Theme string `mapstructure:"theme"` // dark | light
+	Diff     string `mapstructure:"diff"`      // unified | split
+	Files    string `mapstructure:"files"`     // selected | all
+	FileList string `mapstructure:"file_list"` // flat | tree
+	Theme    string `mapstructure:"theme"`     // dark | light
 }
 
 // Load reads config from file, env, and defaults.
@@ -78,6 +79,7 @@ func Load(cfgFile string) (*Config, error) {
 
 	v.SetDefault("ui.diff", "unified")
 	v.SetDefault("ui.files", "selected")
+	v.SetDefault("ui.file_list", "flat")
 	v.SetDefault("ui.theme", "dark")
 	v.SetDefault("ai.max_context_bytes", 120000)
 	v.SetDefault("ai.timeout_sec", 120)
@@ -115,6 +117,9 @@ func Load(cfgFile string) (*Config, error) {
 	}
 	if cfg.UI.Files == "" {
 		cfg.UI.Files = "selected"
+	}
+	if cfg.UI.FileList == "" {
+		cfg.UI.FileList = "flat"
 	}
 	if cfg.UI.Theme == "" {
 		cfg.UI.Theme = "dark"

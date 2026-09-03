@@ -81,6 +81,7 @@ defaults:
 ui:
   diff: unified      # unified | split
   files: selected    # selected | all
+  file_list: flat    # flat | tree
   theme: dark
 ```
 
@@ -177,12 +178,15 @@ prui version
 | `Tab` | PR list: next tab · Files ↔ diff |
 | `←`/`→` | PR list: Open / Drafts / Merged |
 | `1`/`2`/`3` | PR list: jump to Open / Drafts / Merged |
-| `Enter` | Open PR / load file |
+| `Enter` | Open PR / load file · expand/collapse dirs (tree) or omitted lines |
 | `c` | New comment on line |
 | `p` | PR overview (status, reviews, tasks, description, summary, conversation) |
 | `C` | Overview focused on conversation |
 | `S` | AI summarize (`ai.default`, current detail level) |
 | `s` | Cycle summary detail: short → medium → full |
+| `d` | Toggle unified / split layout |
+| `t` | Toggle flat / tree file list |
+| `a` | Toggle this-file / all-files view |
 | `R` | Reply to selected comment (diff target / overview conversation) |
 | `,` / `.` | Prev/next reply target on the cursor line |
 | `1`–`9` | Jump to reply target `#N` on the cursor line |

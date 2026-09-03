@@ -59,15 +59,6 @@ func (i prItem) FilterValue() string {
 	return fmt.Sprintf("#%d %s %s %s", i.pr.Ref.Number, i.pr.Title, i.pr.Author, i.pr.State)
 }
 
-type fileItem struct {
-	file     domain.FileChange
-	drafts   int
-	comments int
-	maxTitle int // list content width for path fitting; 0 = no fit
-}
-
-func (i fileItem) FilterValue() string { return i.file.Path }
-
 type Model struct {
 	opts   Options
 	screen screen
@@ -88,17 +79,19 @@ type Model struct {
 	fileDiff *domain.FileDiff
 	session  *review.Session
 
-	cursorLine int
-	rangeStart int // -1 = no visual range
-	hl         *diff.Highlighter
-	status     string
-	errMsg     string
-	submitIdx  int
-	helpText   string
-	loading    bool
-	bodyVP     viewport.Model
-	splitDiff  bool
-	showAll    bool // all files in one scrollable view
+	cursorLine    int
+	rangeStart    int // -1 = no visual range
+	hl            *diff.Highlighter
+	status        string
+	errMsg        string
+	submitIdx     int
+	helpText      string
+	loading       bool
+	bodyVP        viewport.Model
+	splitDiff     bool
+	showAll       bool // all files in one scrollable view
+	fileTree      bool // files pane as directory tree
+	collapsedDirs map[string]bool
 
 	commenting     bool
 	editingID      string // non-empty while editing an existing draft
@@ -117,8 +110,8 @@ type Model struct {
 
 	diffCache        map[string]*domain.FileDiff
 	flat             []flatRow
-	allGen           int // bumps to cancel in-flight all-file loads
-	fileContentCache map[string]string           // path → head file text
+	allGen           int                        // bumps to cancel in-flight all-file loads
+	fileContentCache map[string]string          // path → head file text
 	gapHeaders       map[string]domain.DiffLine // gapKey → collapsed header
 
 	summary       string
@@ -193,20 +186,22 @@ func NewModel(opts Options) Model {
 	}
 
 	m := Model{
-		opts:       opts,
-		screen:     screenPRList,
-		pane:       paneFiles,
-		prList:     prList,
-		fileList:   fileList,
-		diffVP:     viewport.New(0, 0),
-		bodyVP:     viewport.New(0, 0),
-		comment:    ta,
-		rangeStart: -1,
-		hl:         diff.NewHighlighter(theme),
-		helpText:   defaultHelp,
-		loading:    true,
-		splitDiff:  opts.Config != nil && opts.Config.UI.Diff == "split",
-		showAll:    opts.Config != nil && opts.Config.UI.Files == "all",
+		opts:             opts,
+		screen:           screenPRList,
+		pane:             paneFiles,
+		prList:           prList,
+		fileList:         fileList,
+		diffVP:           viewport.New(0, 0),
+		bodyVP:           viewport.New(0, 0),
+		comment:          ta,
+		rangeStart:       -1,
+		hl:               diff.NewHighlighter(theme),
+		helpText:         defaultHelp,
+		loading:          true,
+		splitDiff:        opts.Config != nil && opts.Config.UI.Diff == "split",
+		showAll:          opts.Config != nil && opts.Config.UI.Files == "all",
+		fileTree:         opts.Config != nil && opts.Config.UI.FileList == "tree",
+		collapsedDirs:    map[string]bool{},
 		diffCache:        map[string]*domain.FileDiff{},
 		fileContentCache: map[string]string{},
 		gapHeaders:       map[string]domain.DiffLine{},
@@ -227,7 +222,7 @@ const defaultHelp = `Keys
   ctrl+d/u  page down / page up (half screen)
   tab       PR list: next tab · review: switch pane
   ←/→       PR list: switch Open / Drafts / Merged
-  enter     open PR / load file · expand/collapse omitted lines
+  enter     open PR / load file · expand/collapse dirs or omitted lines
   c         new comment on line (not on merged)
   R         reply to selected comment (diff: ▸ target · overview conversation)
   ,/.       prev/next reply target on line
@@ -242,6 +237,7 @@ const defaultHelp = `Keys
   S         AI summarize (config ai.default)
   s         cycle summary detail (short → medium → full)
   d         toggle unified/split layout
+  t         toggle flat / tree file list
   a         toggle this-file / all-files view
   [ ]       prev/next hunk
   enter     expand/collapse omitted unchanged lines (on ··· gap)
@@ -257,6 +253,8 @@ Overview: reviews · tab section · j/k · space toggle task · S summarize · s
 Views
   this-file   only the selected path (default)
   all-files   every path in one scroll; file list + section headers track focus
+  flat list   full paths in the files pane (default; key t)
+  tree list   directory tree with collapse (key t / ui.file_list: tree)
   overview    status, reviews, tasks, description, summary, conversation (key p)
   merged      view-only: browse diff/overview, no comments or submit`
 
@@ -760,6 +758,16 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Unified layout"
 			}
 			return m, nil
+		case "t":
+			m.fileTree = !m.fileTree
+			if m.fileTree {
+				m.status = "File tree"
+			} else {
+				m.status = "Flat file list"
+				m.collapsedDirs = map[string]bool{}
+			}
+			m.refreshFileList()
+			return m, nil
 		case "a":
 			m.showAll = !m.showAll
 			m.rangeStart = -1
@@ -941,18 +949,22 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.pane == paneFiles {
 			prevPath := ""
-			if item, ok := m.fileList.SelectedItem().(fileItem); ok {
+			if item, ok := m.fileList.SelectedItem().(fileItem); ok && item.isFile() {
 				prevPath = item.file.Path
 			}
 			switch msg.String() {
 			case "enter", "l":
 				if item, ok := m.fileList.SelectedItem().(fileItem); ok {
+					if item.isDir {
+						m.toggleDirCollapse(item.dirPath)
+						return m, nil
+					}
 					return m, m.selectFile(item.file.Path)
 				}
 			}
 			var cmd tea.Cmd
 			m.fileList, cmd = m.fileList.Update(msg)
-			if item, ok := m.fileList.SelectedItem().(fileItem); ok {
+			if item, ok := m.fileList.SelectedItem().(fileItem); ok && item.isFile() {
 				if item.file.Path != prevPath && item.file.Path != m.activePath {
 					return m, tea.Batch(cmd, m.selectFile(item.file.Path))
 				}
@@ -1918,8 +1930,24 @@ func (m *Model) jumpHunk(dir int) {
 	}
 }
 
+func (m *Model) toggleDirCollapse(dirPath string) {
+	if dirPath == "" {
+		return
+	}
+	if m.collapsedDirs == nil {
+		m.collapsedDirs = map[string]bool{}
+	}
+	if m.collapsedDirs[dirPath] {
+		delete(m.collapsedDirs, dirPath)
+		m.status = "Expanded " + dirPath
+	} else {
+		m.collapsedDirs[dirPath] = true
+		m.status = "Collapsed " + dirPath
+	}
+	m.refreshFileList()
+}
+
 func (m *Model) refreshFileList() {
-	items := make([]list.Item, len(m.files))
 	draftCounts := map[string]int{}
 	commentCounts := map[string]int{}
 	if m.session != nil {
@@ -1933,15 +1961,17 @@ func (m *Model) refreshFileList() {
 		}
 	}
 	titleW := m.fileListTitleWidth()
-	for i, f := range m.files {
-		items[i] = fileItem{
-			file:     f,
-			drafts:   draftCounts[f.Path],
-			comments: commentCounts[f.Path],
-			maxTitle: titleW,
-		}
+	prevPath := ""
+	if item, ok := m.fileList.SelectedItem().(fileItem); ok && item.isFile() {
+		prevPath = item.file.Path
+	} else if m.activePath != "" {
+		prevPath = m.activePath
 	}
+	items := buildFileListItems(m.files, m.fileTree, m.collapsedDirs, draftCounts, commentCounts, titleW)
 	m.fileList.SetItems(items)
+	if prevPath != "" {
+		m.syncFileList(prevPath)
+	}
 }
 
 func (m *Model) fileListTitleWidth() int {
@@ -2519,6 +2549,10 @@ func (m Model) reviewHelpLine() string {
 	if m.showAll {
 		view = "all-files"
 	}
+	listMode := "flat"
+	if m.fileTree {
+		listMode = "tree"
+	}
 	layout := "unified"
 	if m.splitDiff {
 		layout = "split"
@@ -2532,23 +2566,23 @@ func (m Model) reviewHelpLine() string {
 	if fd, li, ok := m.diffLineAtCursor(); ok && m.pane == paneDiff {
 		ln := fd.Lines[li]
 		if diff.ExpandableGap(ln) {
-			return fmt.Sprintf("enter expand %d lines · tab pane(%s) · j/k · [/] hunk · a %s · d %s · ? · q",
-				ln.GapBefore, pane, view, layout)
+			return fmt.Sprintf("enter expand %d lines · tab pane(%s) · j/k · [/] hunk · a %s · t %s · d %s · ? · q",
+				ln.GapBefore, pane, view, listMode, layout)
 		}
 		if ln.Expanded {
-			return fmt.Sprintf("enter collapse · tab pane(%s) · j/k · [/] hunk · a %s · d %s · ? · q",
-				pane, view, layout)
+			return fmt.Sprintf("enter collapse · tab pane(%s) · j/k · [/] hunk · a %s · t %s · d %s · ? · q",
+				pane, view, listMode, layout)
 		}
 	}
 	if m.reviewReadOnly() {
 		return fmt.Sprintf(
-			"tab pane(%s) · j/k · ^d/^u · [/] hunk · enter expand · y yank · a %s · d %s · p overview(%d/%d) · S summarize · s detail · O open · view only · ? · q",
-			pane, view, layout, open, nConv,
+			"tab pane(%s) · j/k · ^d/^u · [/] hunk · enter expand · y yank · a %s · t %s · d %s · p overview(%d/%d) · S summarize · s detail · O open · view only · ? · q",
+			pane, view, listMode, layout, open, nConv,
 		)
 	}
 	return fmt.Sprintf(
-		"tab pane(%s) · j/k · ^d/^u · [/] hunk · enter expand · c comment · ,/.|# target · R reply · e edit · x del · v range · y yank · a %s · d %s · p overview(%d/%d) · S summarize · s detail · r submit · O open · ? · q",
-		pane, view, layout, open, nConv,
+		"tab pane(%s) · j/k · ^d/^u · [/] hunk · enter expand · c comment · ,/.|# target · R reply · e edit · x del · v range · y yank · a %s · t %s · d %s · p overview(%d/%d) · S summarize · s detail · r submit · O open · ? · q",
+		pane, view, listMode, layout, open, nConv,
 	)
 }
 

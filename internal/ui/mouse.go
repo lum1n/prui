@@ -134,6 +134,10 @@ func (m *Model) clickFileList(bodyY int) tea.Cmd {
 	}
 	m.fileList.Select(idx)
 	if item, ok := m.fileList.SelectedItem().(fileItem); ok {
+		if item.isDir {
+			m.toggleDirCollapse(item.dirPath)
+			return nil
+		}
 		if item.file.Path != m.activePath {
 			return m.selectFile(item.file.Path)
 		}
@@ -217,11 +221,11 @@ func (m *Model) scrollFileListBy(delta int) tea.Cmd {
 		return nil
 	}
 	prevPath := ""
-	if item, ok := m.fileList.SelectedItem().(fileItem); ok {
+	if item, ok := m.fileList.SelectedItem().(fileItem); ok && item.isFile() {
 		prevPath = item.file.Path
 	}
 	m.fileList.Select(idx)
-	if item, ok := m.fileList.SelectedItem().(fileItem); ok {
+	if item, ok := m.fileList.SelectedItem().(fileItem); ok && item.isFile() {
 		if item.file.Path != prevPath && item.file.Path != m.activePath {
 			return m.selectFile(item.file.Path)
 		}

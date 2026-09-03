@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -172,45 +173,122 @@ func (d fileDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		return
 	}
 
-	mark, markStyle := fileStatusGlyph(fi.file.Status)
-	extra := ""
-	if fi.drafts > 0 || fi.comments > 0 {
-		extra = fmt.Sprintf("  [%d/%d]", fi.drafts, fi.comments)
-	}
-	prefixW := 2 // "X "
-	path := fi.file.Path
-	if fi.maxTitle > 0 {
-		budget := fi.maxTitle - prefixW - len(extra)
-		path = fitPathKeepBase(path, budget)
-	}
-	rest := path + extra
-
 	isSelected := index == m.Index() && m.FilterState() != list.Filtering
 	emptyFilter := m.FilterState() == list.Filtering && m.FilterValue() == ""
 	textwidth := m.Width() - 2
 	if textwidth < 4 {
 		textwidth = 4
 	}
-	rest = ansi.Truncate(rest, textwidth-prefixW, "…")
+
+	if fi.isDir {
+		prefix := treePrefix(fi.lasts, true, fi.collapsed)
+		label := prefix + fi.name
+		label = ansi.Truncate(label, textwidth, "…")
+		var line string
+		switch {
+		case emptyFilter:
+			line = d.styles.DimmedTitle.Render(label)
+		case isSelected:
+			border := lipgloss.NewStyle().
+				Foreground(listAccent).
+				Background(listSelBg).
+				SetString("│")
+			rest := lipgloss.NewStyle().
+				Foreground(listFgMuted).
+				Background(listSelBg).
+				Bold(true).
+				Render(label)
+			line = border.String() + rest
+		default:
+			line = " " + mutedStyle.Render(label)
+		}
+		fmt.Fprint(w, line) //nolint:errcheck
+		return
+	}
+
+	mark, markStyle := fileStatusGlyph(fi.file.Status)
+	extra := ""
+	if fi.drafts > 0 || fi.comments > 0 {
+		extra = fmt.Sprintf("  [%d/%d]", fi.drafts, fi.comments)
+	}
+
+	var rest string
+	if len(fi.lasts) > 0 {
+		// Tree mode: branch + basename.
+		prefix := treePrefix(fi.lasts, false, false)
+		path := fi.name
+		if path == "" {
+			path = fi.file.Path
+		}
+		if fi.maxTitle > 0 {
+			budget := fi.maxTitle - lipgloss.Width(prefix) - 2 - len(extra)
+			path = fitPathKeepBase(path, budget)
+		}
+		rest = prefix + mark + " " + path + extra
+	} else {
+		prefixW := 2 // "X "
+		path := fi.file.Path
+		if fi.maxTitle > 0 {
+			budget := fi.maxTitle - prefixW - len(extra)
+			path = fitPathKeepBase(path, budget)
+		}
+		rest = path + extra
+		rest = mark + " " + rest
+	}
+	rest = ansi.Truncate(rest, textwidth, "…")
 
 	var line string
 	switch {
 	case emptyFilter:
-		line = d.styles.DimmedTitle.Render(mark + " " + rest)
+		line = d.styles.DimmedTitle.Render(rest)
 	case isSelected:
-		markPart := markStyle.Background(listSelBg).Bold(true).Render(mark)
-		restPart := lipgloss.NewStyle().
-			Foreground(listFg).
-			Background(listSelBg).
-			Bold(true).
-			Render(" " + rest)
 		border := lipgloss.NewStyle().
 			Foreground(listAccent).
 			Background(listSelBg).
 			SetString("│")
-		line = border.String() + markPart + restPart
+		if len(fi.lasts) > 0 {
+			// Tree: color the status glyph inside the selection.
+			prefix := treePrefix(fi.lasts, false, false)
+			path := fi.name
+			if fi.maxTitle > 0 {
+				budget := fi.maxTitle - lipgloss.Width(prefix) - 2 - len(extra)
+				path = fitPathKeepBase(path, budget)
+			}
+			body := prefix + mark + " " + path + extra
+			body = ansi.Truncate(body, textwidth, "…")
+			line = border.String() + lipgloss.NewStyle().
+				Foreground(listFg).
+				Background(listSelBg).
+				Bold(true).
+				Render(body)
+		} else {
+			markPart := markStyle.Background(listSelBg).Bold(true).Render(mark)
+			path := fi.file.Path
+			if fi.maxTitle > 0 {
+				budget := fi.maxTitle - 2 - len(extra)
+				path = fitPathKeepBase(path, budget)
+			}
+			restPart := lipgloss.NewStyle().
+				Foreground(listFg).
+				Background(listSelBg).
+				Bold(true).
+				Render(" " + ansi.Truncate(path+extra, textwidth-2, "…"))
+			line = border.String() + markPart + restPart
+		}
 	default:
-		line = " " + markStyle.Render(mark) + " " + d.styles.NormalTitle.Inline(true).Render(rest)
+		if len(fi.lasts) > 0 {
+			prefix := treePrefix(fi.lasts, false, false)
+			path := fi.name
+			if fi.maxTitle > 0 {
+				budget := fi.maxTitle - lipgloss.Width(prefix) - 2 - len(extra)
+				path = fitPathKeepBase(path, budget)
+			}
+			line = " " + mutedStyle.Render(prefix) + markStyle.Render(mark) + " " +
+				d.styles.NormalTitle.Inline(true).Render(ansi.Truncate(path+extra, textwidth-lipgloss.Width(prefix)-2, "…"))
+		} else {
+			line = " " + markStyle.Render(mark) + " " + d.styles.NormalTitle.Inline(true).Render(
+				ansi.Truncate(strings.TrimPrefix(rest, mark+" "), textwidth-2, "…"))
+		}
 	}
 	fmt.Fprint(w, line) //nolint:errcheck
 }

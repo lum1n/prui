@@ -107,6 +107,8 @@ type Model struct {
 	rightWidth     int
 	contentHeight  int
 	diffClickMap   []int // viewport content line → cursor index (-1 = non-selectable)
+	diffWinStart   int   // sticky render window [start,end); -1 = unset
+	diffWinEnd     int
 
 	diffCache        map[string]*domain.FileDiff
 	flat             []flatRow
@@ -205,6 +207,8 @@ func NewModel(opts Options) Model {
 		diffCache:        map[string]*domain.FileDiff{},
 		fileContentCache: map[string]string{},
 		gapHeaders:       map[string]domain.DiffLine{},
+		diffWinStart:     -1,
+		diffWinEnd:       -1,
 	}
 	if opts.Config != nil {
 		m.summaryDetail = ai.ParseDetailLevel(opts.Config.AI.SummaryDetail)
@@ -442,6 +446,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.fileDiff = msg.fd
 		m.activePath = msg.path
+		m.resetDiffWindow()
 		if m.showAll {
 			m.rebuildFlat()
 			m.cursorLine = m.jumpFlatToPath(msg.path)
@@ -773,6 +778,7 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rangeStart = -1
 			m.commenting = false
 			m.editingID = ""
+			m.resetDiffWindow()
 			if m.showAll {
 				m.status = "All-files view"
 				m.loading = true
@@ -986,6 +992,7 @@ func (m *Model) selectFile(path string) tea.Cmd {
 			m.syncFileList(path)
 			m.pane = paneDiff
 			m.status = fmt.Sprintf("all files · %s", path)
+			m.resetDiffWindow()
 			m.renderDiff()
 			return nil
 		}
@@ -2220,22 +2227,11 @@ func (m *Model) renderDiff() {
 	b.WriteString(hdr)
 	m.noteDiffLines(hdr, -1)
 
-	start, end := 0, len(m.fileDiff.Lines)
-	const margin = 200
-	if len(m.fileDiff.Lines) > margin*2 {
-		start = m.cursorLine - margin
-		if start < 0 {
-			start = 0
-		}
-		end = m.cursorLine + margin
-		if end > len(m.fileDiff.Lines) {
-			end = len(m.fileDiff.Lines)
-		}
-		if start > 0 {
-			elide := mutedStyle.Render(fmt.Sprintf("  ··· %d lines above ···", start)) + "\n"
-			b.WriteString(elide)
-			m.noteDiffLines(elide, -1)
-		}
+	start, end := m.diffRenderWindow(len(m.fileDiff.Lines), m.cursorLine)
+	if start > 0 {
+		elide := mutedStyle.Render(fmt.Sprintf("  ··· %d lines above ···", start)) + "\n"
+		b.WriteString(elide)
+		m.noteDiffLines(elide, -1)
 	}
 	for i := start; i < end; i++ {
 		m.writeDiffLine(&b, m.fileDiff, m.fileDiff.Lines[i], i == m.cursorLine || m.lineInRange(i), i == m.cursorLine, th, width, i)
@@ -2258,22 +2254,11 @@ func (m *Model) renderFlatDiff(th diff.Theme, width int) {
 		return
 	}
 	var b strings.Builder
-	start, end := 0, len(m.flat)
-	const margin = 200
-	if len(m.flat) > margin*2 {
-		start = m.cursorLine - margin
-		if start < 0 {
-			start = 0
-		}
-		end = m.cursorLine + margin
-		if end > len(m.flat) {
-			end = len(m.flat)
-		}
-		if start > 0 {
-			elide := mutedStyle.Render(fmt.Sprintf("  ··· %d rows above ···", start)) + "\n"
-			b.WriteString(elide)
-			m.noteDiffLines(elide, -1)
-		}
+	start, end := m.diffRenderWindow(len(m.flat), m.cursorLine)
+	if start > 0 {
+		elide := mutedStyle.Render(fmt.Sprintf("  ··· %d rows above ···", start)) + "\n"
+		b.WriteString(elide)
+		m.noteDiffLines(elide, -1)
 	}
 	for i := start; i < end; i++ {
 		row := m.flat[i]
@@ -2313,6 +2298,54 @@ func (m *Model) contentLineForCursor() int {
 		}
 	}
 	return -1
+}
+
+const (
+	diffWindowMargin = 200 // half-span around the cursor when (re)anchoring
+	diffWindowKeep   = 50  // re-anchor only when cursor is this close to an edge
+)
+
+func (m *Model) resetDiffWindow() {
+	m.diffWinStart, m.diffWinEnd = -1, -1
+}
+
+// diffRenderWindow returns the [start,end) slice of rows to paint.
+// Large diffs use a sticky window so j/k doesn't slide the buffer every step —
+// sliding yanked variable-height threads off the top and jumped YOffset even
+// when the cursor stayed centered.
+func (m *Model) diffRenderWindow(n, cursor int) (start, end int) {
+	if n <= 0 {
+		return 0, 0
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= n {
+		cursor = n - 1
+	}
+	if n <= diffWindowMargin*2 {
+		m.diffWinStart, m.diffWinEnd = 0, n
+		return 0, n
+	}
+	start, end = m.diffWinStart, m.diffWinEnd
+	need := start < 0 || end <= start || end > n || start >= n ||
+		cursor < start+diffWindowKeep || cursor >= end-diffWindowKeep
+	if need {
+		start = cursor - diffWindowMargin
+		if start < 0 {
+			start = 0
+		}
+		end = start + diffWindowMargin*2
+		if end > n {
+			end = n
+			start = end - diffWindowMargin*2
+			if start < 0 {
+				start = 0
+			}
+		}
+		m.diffWinStart, m.diffWinEnd = start, end
+	}
+	return start, end
 }
 
 // scrollDiffCursorIntoView keeps the selected diff row centered in the

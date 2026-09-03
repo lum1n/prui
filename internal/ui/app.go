@@ -113,6 +113,7 @@ type Model struct {
 	leftWidth      int
 	rightWidth     int
 	contentHeight  int
+	diffClickMap   []int // viewport content line → cursor index (-1 = non-selectable)
 
 	diffCache map[string]*domain.FileDiff
 	flat      []flatRow
@@ -596,6 +597,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) updatePRList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		return m.handlePRListMouse(msg)
 	case tea.KeyMsg:
 		filtering := m.prList.FilterState() == list.Filtering
 		switch msg.String() {
@@ -685,8 +688,6 @@ func (m Model) rejectWrite(action string) (tea.Model, tea.Cmd) {
 	m.status = action + " unavailable on " + strings.ToLower(m.pr.State) + " PRs"
 	return m, nil
 }
-
-const mouseWheelLines = 3
 
 func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.commenting {
@@ -1870,73 +1871,6 @@ func (m *Model) nudgeDiffCursor(delta int) {
 	m.renderDiff()
 }
 
-// handleReviewMouse scrolls the diff (or file list) under the cursor.
-func (m Model) handleReviewMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if msg.Action != tea.MouseActionPress {
-		return m, nil
-	}
-	var delta int
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
-		delta = -mouseWheelLines
-	case tea.MouseButtonWheelDown:
-		delta = mouseWheelLines
-	default:
-		return m, nil
-	}
-	// Body sits below the title row.
-	if m.contentHeight > 0 && (msg.Y < 1 || msg.Y >= 1+m.contentHeight) {
-		return m, nil
-	}
-	if m.leftWidth > 0 && msg.X < m.leftWidth {
-		return m, m.scrollFileListBy(delta)
-	}
-	if m.fileDiff == nil && !(m.showAll && len(m.flat) > 0) {
-		return m, nil
-	}
-	m.pane = paneDiff
-	m.nudgeDiffCursor(delta)
-	return m, nil
-}
-
-func (m *Model) scrollFileListBy(delta int) tea.Cmd {
-	n := len(m.fileList.Items())
-	if n == 0 {
-		return nil
-	}
-	m.pane = paneFiles
-	step := 1
-	if delta < 0 {
-		step = -1
-	}
-	// One list item per wheel notch (delta is in diff lines).
-	notches := delta / mouseWheelLines
-	if notches == 0 {
-		notches = step
-	}
-	idx := m.fileList.Index() + notches
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= n {
-		idx = n - 1
-	}
-	if idx == m.fileList.Index() {
-		return nil
-	}
-	prevPath := ""
-	if item, ok := m.fileList.SelectedItem().(fileItem); ok {
-		prevPath = item.file.Path
-	}
-	m.fileList.Select(idx)
-	if item, ok := m.fileList.SelectedItem().(fileItem); ok {
-		if item.file.Path != prevPath && item.file.Path != m.activePath {
-			return m.selectFile(item.file.Path)
-		}
-	}
-	return nil
-}
-
 func (m *Model) jumpHunk(dir int) {
 	if m.showAll {
 		if len(m.flat) == 0 {
@@ -2228,18 +2162,21 @@ func (m *Model) renderDiff() {
 		th = diff.ThemeFor(m.opts.Config.UI.Theme)
 	}
 
+	m.resetDiffClickMap()
 	if m.showAll {
 		m.renderFlatDiff(th, width)
 		return
 	}
 	if m.fileDiff == nil {
 		m.diffVP.SetContent("  select a file")
+		m.finalizeDiffClickMap("  select a file")
 		return
 	}
 
 	var b strings.Builder
-	b.WriteString(diff.PaintFileHeader(m.fileDiff.Path, m.fileDiff.Status, th, width))
-	b.WriteByte('\n')
+	hdr := diff.PaintFileHeader(m.fileDiff.Path, m.fileDiff.Status, th, width) + "\n"
+	b.WriteString(hdr)
+	m.noteDiffLines(hdr, -1)
 
 	start, end := 0, len(m.fileDiff.Lines)
 	const margin = 200
@@ -2253,16 +2190,22 @@ func (m *Model) renderDiff() {
 			end = len(m.fileDiff.Lines)
 		}
 		if start > 0 {
-			b.WriteString(mutedStyle.Render(fmt.Sprintf("  ··· %d lines above ···", start)) + "\n")
+			elide := mutedStyle.Render(fmt.Sprintf("  ··· %d lines above ···", start)) + "\n"
+			b.WriteString(elide)
+			m.noteDiffLines(elide, -1)
 		}
 	}
 	for i := start; i < end; i++ {
-		m.writeDiffLine(&b, m.fileDiff, m.fileDiff.Lines[i], i == m.cursorLine || m.lineInRange(i), i == m.cursorLine, th, width)
+		m.writeDiffLine(&b, m.fileDiff, m.fileDiff.Lines[i], i == m.cursorLine || m.lineInRange(i), i == m.cursorLine, th, width, i)
 	}
 	if end < len(m.fileDiff.Lines) {
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ··· %d lines below ···", len(m.fileDiff.Lines)-end)) + "\n")
+		elide := mutedStyle.Render(fmt.Sprintf("  ··· %d lines below ···", len(m.fileDiff.Lines)-end)) + "\n"
+		b.WriteString(elide)
+		m.noteDiffLines(elide, -1)
 	}
-	m.diffVP.SetContent(b.String())
+	content := b.String()
+	m.diffVP.SetContent(content)
+	m.finalizeDiffClickMap(content)
 	m.diffVP.GotoTop()
 	// File header is 3 lines (rules + title).
 	if start == 0 {
@@ -2276,6 +2219,7 @@ func (m *Model) renderDiff() {
 func (m *Model) renderFlatDiff(th diff.Theme, width int) {
 	if len(m.flat) == 0 {
 		m.diffVP.SetContent("  loading files…")
+		m.finalizeDiffClickMap("  loading files…")
 		return
 	}
 	var b strings.Builder
@@ -2291,7 +2235,9 @@ func (m *Model) renderFlatDiff(th diff.Theme, width int) {
 			end = len(m.flat)
 		}
 		if start > 0 {
-			b.WriteString(mutedStyle.Render(fmt.Sprintf("  ··· %d rows above ···", start)) + "\n")
+			elide := mutedStyle.Render(fmt.Sprintf("  ··· %d rows above ···", start)) + "\n"
+			b.WriteString(elide)
+			m.noteDiffLines(elide, -1)
 		}
 	}
 	for i := start; i < end; i++ {
@@ -2302,19 +2248,24 @@ func (m *Model) renderFlatDiff(th diff.Theme, width int) {
 			if sel {
 				hdr = lipgloss.NewStyle().Background(th.SelectedBg).Render(hdr)
 			}
-			b.WriteString(hdr)
-			b.WriteByte('\n')
+			chunk := hdr + "\n"
+			b.WriteString(chunk)
+			m.noteDiffLines(chunk, i)
 			continue
 		}
 		if row.fd == nil || row.line < 0 || row.line >= len(row.fd.Lines) {
 			continue
 		}
-		m.writeDiffLine(&b, row.fd, row.fd.Lines[row.line], sel, i == m.cursorLine, th, width)
+		m.writeDiffLine(&b, row.fd, row.fd.Lines[row.line], sel, i == m.cursorLine, th, width, i)
 	}
 	if end < len(m.flat) {
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ··· %d rows below ···", len(m.flat)-end)) + "\n")
+		elide := mutedStyle.Render(fmt.Sprintf("  ··· %d rows below ···", len(m.flat)-end)) + "\n"
+		b.WriteString(elide)
+		m.noteDiffLines(elide, -1)
 	}
-	m.diffVP.SetContent(b.String())
+	content := b.String()
+	m.diffVP.SetContent(content)
+	m.finalizeDiffClickMap(content)
 	m.diffVP.GotoTop()
 	if start == 0 {
 		offset := m.cursorLine - m.diffVP.Height/2
@@ -2335,10 +2286,11 @@ func (m *Model) lineInRange(i int) bool {
 	return i >= lo && i <= hi
 }
 
-func (m *Model) writeDiffLine(b *strings.Builder, fd *domain.FileDiff, ln domain.DiffLine, sel, focus bool, th diff.Theme, width int) {
+func (m *Model) writeDiffLine(b *strings.Builder, fd *domain.FileDiff, ln domain.DiffLine, sel, focus bool, th diff.Theme, width, cursorIdx int) {
 	opt := diff.Options{Theme: th, Width: width, Selected: sel, Split: m.splitDiff}
-	b.WriteString(diff.Paint(m.hl, fd.Path, ln, opt))
-	b.WriteByte('\n')
+	line := diff.Paint(m.hl, fd.Path, ln, opt) + "\n"
+	b.WriteString(line)
+	m.noteDiffLines(line, cursorIdx)
 	var drafts []domain.DraftComment
 	if m.session != nil {
 		drafts = m.session.Draft.Comments
@@ -2351,7 +2303,9 @@ func (m *Model) writeDiffLine(b *strings.Builder, fd *domain.FileDiff, ln domain
 		selectedID = m.threadTargetID
 		number = len(replyableIDs(nodes)) > 1
 	}
-	b.WriteString(paintThread(nodes, selectedID, number, th, width))
+	thread := paintThread(nodes, selectedID, number, th, width)
+	b.WriteString(thread)
+	m.noteDiffLines(thread, cursorIdx)
 }
 
 func (m Model) View() string {

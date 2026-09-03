@@ -87,3 +87,52 @@ func TestReviewMouseWheelIgnoresChrome(t *testing.T) {
 		t.Fatalf("title wheel moved cursor to %d", got.cursorLine)
 	}
 }
+
+func TestReviewMouseClickSelectsDiffLine(t *testing.T) {
+	m := Model{
+		screen:        screenReview,
+		pane:          paneDiff,
+		width:         100,
+		height:        40,
+		leftWidth:     30,
+		rightWidth:    70,
+		contentHeight: 37,
+		cursorLine:    0,
+		fileDiff: &domain.FileDiff{
+			Path:  "a.go",
+			Lines: testDiffLines(20),
+		},
+	}
+	m.diffVP.Width = 66
+	m.diffVP.Height = 30
+	m.renderDiff()
+
+	// With YOffset 0, click the viewport row that maps to cursor index 7.
+	target := -1
+	for i, idx := range m.diffClickMap {
+		if idx == 7 {
+			target = i
+			break
+		}
+	}
+	if target < 0 {
+		t.Fatal("no click map entry for line 7")
+	}
+	if target >= m.diffVP.Height {
+		t.Fatalf("mapped line %d outside viewport height %d", target, m.diffVP.Height)
+	}
+
+	next, _ := m.handleReviewMouse(tea.MouseMsg{
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+		X:      50,
+		Y:      1 + 1 + target, // title + panel border + content row
+	})
+	got := next.(Model)
+	if got.cursorLine != 7 {
+		t.Fatalf("click: cursor %d want 7 (content row %d)", got.cursorLine, target)
+	}
+	if got.pane != paneDiff {
+		t.Fatalf("pane=%v want diff", got.pane)
+	}
+}

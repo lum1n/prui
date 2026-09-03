@@ -1855,7 +1855,7 @@ func (m *Model) pageCursor(dir int) {
 }
 
 // nudgeDiffCursor moves the selection by delta lines (clamped). renderDiff
-// keeps the cursor visible without re-centering every step.
+// recenters the cursor in the viewport (vim zz).
 func (m *Model) nudgeDiffCursor(delta int) {
 	if delta == 0 {
 		return
@@ -2246,10 +2246,9 @@ func (m *Model) renderDiff() {
 		m.noteDiffLines(elide, -1)
 	}
 	content := b.String()
-	prevY := m.diffVP.YOffset
 	m.diffVP.SetContent(content)
 	m.finalizeDiffClickMap(content)
-	m.scrollDiffCursorIntoView(prevY)
+	m.scrollDiffCursorIntoView()
 }
 
 func (m *Model) renderFlatDiff(th diff.Theme, width int) {
@@ -2300,10 +2299,9 @@ func (m *Model) renderFlatDiff(th diff.Theme, width int) {
 		m.noteDiffLines(elide, -1)
 	}
 	content := b.String()
-	prevY := m.diffVP.YOffset
 	m.diffVP.SetContent(content)
 	m.finalizeDiffClickMap(content)
-	m.scrollDiffCursorIntoView(prevY)
+	m.scrollDiffCursorIntoView()
 }
 
 // contentLineForCursor returns the first viewport content row for the current
@@ -2317,9 +2315,9 @@ func (m *Model) contentLineForCursor() int {
 	return -1
 }
 
-// scrollDiffCursorIntoView keeps the selected diff row visible without
-// re-centering on every keypress (which caused layout jumps / ghost lines).
-func (m *Model) scrollDiffCursorIntoView(prevY int) {
+// scrollDiffCursorIntoView keeps the selected diff row centered in the
+// viewport (vim zz). Near the top/bottom of the content, SetYOffset clamps.
+func (m *Model) scrollDiffCursorIntoView() {
 	target := m.contentLineForCursor()
 	if target < 0 {
 		return
@@ -2328,23 +2326,7 @@ func (m *Model) scrollDiffCursorIntoView(prevY int) {
 	if h <= 0 {
 		return
 	}
-	// Prefer the previous offset so small cursor moves don't jump the viewport.
-	m.diffVP.SetYOffset(prevY)
-	y := m.diffVP.YOffset
-	pad := 2
-	if target < y+pad {
-		m.diffVP.SetYOffset(max(0, target-pad))
-		return
-	}
-	if target >= y+h-pad {
-		m.diffVP.SetYOffset(max(0, target-h+pad+1))
-		return
-	}
-	// First paint / jump from empty: center once when we were at the top and
-	// the cursor sits well below the fold.
-	if prevY == 0 && target > h/2 {
-		m.diffVP.SetYOffset(max(0, target-h/2))
-	}
+	m.diffVP.SetYOffset(max(0, target-h/2))
 }
 
 func (m *Model) lineInRange(i int) bool {

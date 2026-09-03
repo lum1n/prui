@@ -686,12 +686,16 @@ func (m Model) rejectWrite(action string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+const mouseWheelLines = 3
+
 func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.commenting {
 		return m.updateInlineComment(msg)
 	}
 
 	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		return m.handleReviewMouse(msg)
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q":
@@ -1822,7 +1826,15 @@ func (m *Model) pageCursor(dir int) {
 	if step < 1 {
 		step = 10
 	}
-	delta := dir * step
+	m.nudgeDiffCursor(dir * step)
+}
+
+// nudgeDiffCursor moves the selection by delta lines (clamped), keeping the
+// viewport centered via renderDiff. Used by page keys and mouse wheel.
+func (m *Model) nudgeDiffCursor(delta int) {
+	if delta == 0 {
+		return
+	}
 	if m.showAll {
 		if len(m.flat) == 0 {
 			return
@@ -1856,6 +1868,73 @@ func (m *Model) pageCursor(dir int) {
 	m.threadTargetID = ""
 	m.syncThreadTarget()
 	m.renderDiff()
+}
+
+// handleReviewMouse scrolls the diff (or file list) under the cursor.
+func (m Model) handleReviewMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+	var delta int
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		delta = -mouseWheelLines
+	case tea.MouseButtonWheelDown:
+		delta = mouseWheelLines
+	default:
+		return m, nil
+	}
+	// Body sits below the title row.
+	if m.contentHeight > 0 && (msg.Y < 1 || msg.Y >= 1+m.contentHeight) {
+		return m, nil
+	}
+	if m.leftWidth > 0 && msg.X < m.leftWidth {
+		return m, m.scrollFileListBy(delta)
+	}
+	if m.fileDiff == nil && !(m.showAll && len(m.flat) > 0) {
+		return m, nil
+	}
+	m.pane = paneDiff
+	m.nudgeDiffCursor(delta)
+	return m, nil
+}
+
+func (m *Model) scrollFileListBy(delta int) tea.Cmd {
+	n := len(m.fileList.Items())
+	if n == 0 {
+		return nil
+	}
+	m.pane = paneFiles
+	step := 1
+	if delta < 0 {
+		step = -1
+	}
+	// One list item per wheel notch (delta is in diff lines).
+	notches := delta / mouseWheelLines
+	if notches == 0 {
+		notches = step
+	}
+	idx := m.fileList.Index() + notches
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= n {
+		idx = n - 1
+	}
+	if idx == m.fileList.Index() {
+		return nil
+	}
+	prevPath := ""
+	if item, ok := m.fileList.SelectedItem().(fileItem); ok {
+		prevPath = item.file.Path
+	}
+	m.fileList.Select(idx)
+	if item, ok := m.fileList.SelectedItem().(fileItem); ok {
+		if item.file.Path != prevPath && item.file.Path != m.activePath {
+			return m.selectFile(item.file.Path)
+		}
+	}
+	return nil
 }
 
 func (m *Model) jumpHunk(dir int) {

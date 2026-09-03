@@ -54,6 +54,7 @@ func TestBuildConversationEntriesThreads(t *testing.T) {
 	comments := []domain.Comment{
 		{ID: "1", Author: "Alice", Body: "general", Created: time.Unix(1, 0)},
 		{ID: "2", Author: "Bob", Body: "reply", ParentID: "1", Created: time.Unix(2, 0)},
+		{ID: "3", Author: "Carol", Body: "newer root", Created: time.Unix(10, 0)},
 		{ID: "9", Author: "Eve", Body: "line", Path: "a.go", Anchor: &domain.Anchor{Path: "a.go", Line: 3}, Created: time.Unix(1, 0)},
 	}
 	drafts := []domain.DraftComment{
@@ -61,20 +62,24 @@ func TestBuildConversationEntriesThreads(t *testing.T) {
 		{ID: "d2", Body: "top draft"},
 	}
 	entries := buildConversationEntries(comments, drafts)
-	if len(entries) != 4 {
+	if len(entries) != 5 {
 		t.Fatalf("got %d entries: %+v", len(entries), entries)
 	}
-	if entries[0].Body != "general" || entries[0].Depth != 0 {
-		t.Fatalf("root: %+v", entries[0])
+	// Newest activity first: local top draft, then newer root, then older thread.
+	if entries[0].Body != "top draft" || !entries[0].Draft {
+		t.Fatalf("top draft first: %+v", entries[0])
 	}
-	if entries[1].Body != "draft reply" || entries[1].Depth != 1 || !entries[1].Draft {
-		t.Fatalf("draft reply: %+v", entries[1])
+	if entries[1].Body != "newer root" || entries[1].Depth != 0 {
+		t.Fatalf("newest root: %+v", entries[1])
 	}
-	if entries[2].Body != "reply" || entries[2].Depth != 1 {
-		t.Fatalf("reply: %+v", entries[2])
+	if entries[2].Body != "general" || entries[2].Depth != 0 {
+		t.Fatalf("older root: %+v", entries[2])
 	}
-	if entries[3].Body != "top draft" || !entries[3].Draft {
-		t.Fatalf("top draft: %+v", entries[3])
+	if entries[3].Body != "draft reply" || entries[3].Depth != 1 || !entries[3].Draft {
+		t.Fatalf("draft reply: %+v", entries[3])
+	}
+	if entries[4].Body != "reply" || entries[4].Depth != 1 {
+		t.Fatalf("reply: %+v", entries[4])
 	}
 }
 

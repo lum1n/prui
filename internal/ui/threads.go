@@ -187,14 +187,22 @@ func buildConversationEntries(comments []domain.Comment, drafts []domain.DraftCo
 		}
 		byParent[c.ParentID] = append(byParent[c.ParentID], c)
 	}
-	sort.SliceStable(roots, func(i, j int) bool { return roots[i].Created.Before(roots[j].Created) })
+	sort.SliceStable(roots, func(i, j int) bool { return roots[i].Created.After(roots[j].Created) })
 	for k := range byParent {
+		// Keep replies chronological within a thread.
 		sort.SliceStable(byParent[k], func(i, j int) bool {
 			return byParent[k][i].Created.Before(byParent[k][j].Created)
 		})
 	}
 
 	out := make([]convEntry, 0)
+	// Local top-level drafts first (newest activity).
+	for _, d := range drafts {
+		if d.ParentID != "" || d.Anchor != nil {
+			continue
+		}
+		out = append(out, convEntry{ID: d.ID, Author: "you", Body: d.Body, Depth: 0, Draft: true})
+	}
 	var walk func(c domain.Comment, depth int)
 	walk = func(c domain.Comment, depth int) {
 		out = append(out, convEntry{
@@ -214,12 +222,6 @@ func buildConversationEntries(comments []domain.Comment, drafts []domain.DraftCo
 	}
 	for _, r := range roots {
 		walk(r, 0)
-	}
-	for _, d := range drafts {
-		if d.ParentID != "" || d.Anchor != nil {
-			continue
-		}
-		out = append(out, convEntry{ID: d.ID, Author: "you", Body: d.Body, Depth: 0, Draft: true})
 	}
 	return out
 }

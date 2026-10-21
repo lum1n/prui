@@ -29,6 +29,7 @@ const (
 	screenSubmit
 	screenHelp
 	screenOverview
+	screenAIReview
 )
 
 type pane int
@@ -124,6 +125,13 @@ type Model struct {
 	summarizing   bool
 	summaryGen    int // bumps to ignore stale summarize results
 	summaryDetail ai.DetailLevel
+
+	aiReviewing bool
+	aiReviewGen int // bumps to ignore stale AI review results
+	aiCursor    int // selected row on the AI review screen
+	aiDetailOff int // scroll offset of the AI review detail panel
+	aiEdit      aiEditKind
+	aiEditID    string // suggestion being edited
 
 	login cookieLogin
 }
@@ -248,6 +256,7 @@ const defaultHelp = `Keys
   p         PR overview (status · reviews · tasks · description · summary · conversation)
   C         PR overview → conversation section
   S         AI summarize (config ai.default)
+  A         AI review: suggestions to accept / edit / delete, then submit
   s         cycle summary detail (short → medium → full)
   d         toggle unified/split layout
   t         toggle flat / tree file list
@@ -263,6 +272,8 @@ const defaultHelp = `Keys
 Inline comment: enter save, esc cancel
 Diff thread: ,/. or 1-9 pick target · R reply
 Overview: reviews · tab section · j/k · space toggle task · S summarize · s detail · R reply · c new
+AI review: a/enter accept · ctrl+a accept all · e edit · x delete · o show in diff · c general comment · r submit · ctrl+r rerun
+Submit: j/k verdict · s edit summary (ctrl+s save) · enter submit
 
 Views
   this-file   only the selected path (default)
@@ -447,6 +458,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.summaryErr = ""
 		m.summarizing = false
 		m.summaryGen++
+		m.aiReviewing = false
+		m.aiReviewGen++
+		m.aiCursor = 0
+		m.aiEdit = aiEditNone
 		m.layout()
 		m.refreshFileList()
 		m.status = fmt.Sprintf("PR #%d — %s", m.pr.Ref.Number, m.pr.Title)
@@ -593,6 +608,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "Task updated"
 		return m, m.loadTasks()
 
+	case loadedAIReviewMsg:
+		return m.handleLoadedAIReview(msg)
+
 	case loadedSummaryMsg:
 		if msg.gen != m.summaryGen {
 			return m, nil
@@ -641,6 +659,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case screenOverview:
 		return m.updateOverview(msg)
+	case screenAIReview:
+		return m.updateAIReview(msg)
 	}
 	return m, nil
 }
@@ -791,6 +811,8 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.cycleSummaryDetail()
 		case "S":
 			return m.beginSummarize()
+		case "A":
+			return m.openAIReview(false)
 		case "d":
 			m.splitDiff = !m.splitDiff
 			m.renderDiff()
@@ -857,12 +879,7 @@ func (m Model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Opened in browser"
 			return m, nil
 		case "r":
-			if m.reviewReadOnly() {
-				return m.rejectWrite("Submit")
-			}
-			m.screen = screenSubmit
-			m.submitIdx = 0
-			return m, nil
+			return m.openSubmit()
 		case "c":
 			if m.reviewReadOnly() {
 				return m.rejectWrite("Comment")
@@ -1500,6 +1517,8 @@ func (m Model) updateOverview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.cycleSummaryDetail()
 		case "S":
 			return m.beginSummarize()
+		case "A":
+			return m.openAIReview(false)
 		}
 	}
 	var cmd tea.Cmd
@@ -1611,13 +1630,24 @@ func (m Model) updateSubmit(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenReview
 		return m.rejectWrite("Submit")
 	}
+	if m.aiEdit != aiEditNone {
+		return m.updateAIEdit(msg)
+	}
 	actions := m.availableActions()
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc", "q":
 			m.screen = screenReview
+			m.layout()
 			return m, nil
+		case "s":
+			if m.session == nil {
+				return m, nil
+			}
+			return m, m.beginAIEdit(aiEditSummary, "", m.session.Draft.Summary)
+		case "A":
+			return m.openAIReview(false)
 		case "j", "down":
 			m.submitIdx = (m.submitIdx + 1) % len(actions)
 		case "k", "up":
@@ -2035,7 +2065,7 @@ func (m *Model) layout() {
 	titleH := 1
 	statusH := 1
 	helpH := 0
-	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenOverview || m.screen == screenPRList {
+	if m.screen == screenReview || m.screen == screenSubmit || m.screen == screenOverview || m.screen == screenPRList || m.screen == screenAIReview {
 		helpH = 1
 	}
 	contentH := m.height - titleH - statusH - helpH
@@ -2104,6 +2134,8 @@ func (m *Model) layout() {
 			bodyH = 3
 		}
 		m.comment.SetWidth(m.width - 4)
+	} else if m.screen == screenSubmit {
+		m.comment.SetWidth(max(10, m.width-4))
 	} else {
 		m.comment.SetWidth(diffInnerW - 2)
 		if m.comment.Width() < 10 {
@@ -2111,7 +2143,11 @@ func (m *Model) layout() {
 		}
 	}
 	m.bodyVP.Height = bodyH
-	m.comment.SetHeight(3)
+	if m.aiEdit != aiEditNone {
+		m.comment.SetHeight(6)
+	} else {
+		m.comment.SetHeight(3)
+	}
 	// Only rebuild diff content when the viewport geometry changed — a full
 	// re-center on every layout (resize spam, comment open) was a common
 	// source of the chrome jumping up a couple of rows.
@@ -2503,22 +2539,28 @@ func (m Model) View() string {
 		if !provider.SupportsRequestChanges(m.opts.Host.Kind) {
 			lines = append(lines, mutedStyle.Render("Note: this host has no request-changes action; comments will still post."), "")
 		}
-		n := 0
-		if m.session != nil {
-			n = len(m.session.Draft.Comments)
-		}
-		lines = append(lines, fmt.Sprintf("%d draft comment(s)", n), "")
+		lines = append(lines, m.submitSummaryLines()...)
 		for i, a := range m.availableActions() {
 			prefix := "  "
 			if i == m.submitIdx {
 				prefix = "> "
 			}
-			lines = append(lines, prefix+reviewActionLabel(a))
+			label := reviewActionLabel(a)
+			if m.session != nil && m.session.AIReview != nil && m.session.AIReview.Verdict == a {
+				label += mutedStyle.Render("  (AI suggestion)")
+			}
+			lines = append(lines, prefix+label)
 		}
-		lines = append(lines, "", mutedStyle.Render("enter submit · esc cancel"))
+		if m.aiEdit == aiEditSummary {
+			lines = append(lines, "", draftStyle.Render("✎ review summary  (ctrl+s save · esc cancel)"), m.comment.View())
+		} else {
+			lines = append(lines, "", mutedStyle.Render("enter submit · s edit summary · esc cancel"))
+		}
 		body = strings.Join(lines, "\n")
 	case screenHelp:
 		body = m.helpText
+	case screenAIReview:
+		body = m.aiReviewView()
 	case screenOverview:
 		inner := m.bodyVP.View()
 		if m.commenting {
@@ -2556,6 +2598,9 @@ func (m Model) View() string {
 	case m.screen == screenReview, m.screen == screenSubmit, m.screen == screenOverview:
 		helpH = 1
 		helpBar = helpBarStyle.Width(m.width).MaxWidth(m.width).MaxHeight(1).Render(truncate(m.reviewHelpLine(), m.width))
+	case m.screen == screenAIReview:
+		helpH = 1
+		helpBar = helpBarStyle.Width(m.width).MaxWidth(m.width).MaxHeight(1).Render(truncate(aiReviewHelpLine(m.aiEdit != aiEditNone), m.width))
 	case m.screen == screenPRList:
 		helpH = 1
 		helpBar = helpBarStyle.Width(m.width).MaxWidth(m.width).MaxHeight(1).Render(truncate(prListHelpLine(m.cookieSession() != nil), m.width))
@@ -2610,7 +2655,10 @@ func pinFrame(s string, width, height int) string {
 
 func (m Model) reviewHelpLine() string {
 	if m.screen == screenSubmit {
-		return "j/k choose · enter submit · esc cancel"
+		if m.aiEdit != aiEditNone {
+			return aiReviewHelpLine(true)
+		}
+		return "j/k choose · enter submit · s edit summary · A AI review · esc cancel"
 	}
 	if m.screen == screenOverview {
 		if m.commenting {
@@ -2676,7 +2724,7 @@ func (m Model) reviewHelpLine() string {
 		)
 	}
 	return fmt.Sprintf(
-		"tab pane(%s) · j/k · ^d/^u · [/] hunk · enter expand · c comment · ,/.|# target · R reply · e edit · x del · v range · y yank · a %s · t %s · d %s · p overview(%d/%d) · S summarize · s detail · r submit · O open · ? · q",
+		"tab pane(%s) · j/k · ^d/^u · [/] hunk · enter expand · c comment · ,/.|# target · R reply · e edit · x del · v range · y yank · a %s · t %s · d %s · p overview(%d/%d) · S summarize · A AI review · r submit · O open · ? · q",
 		pane, view, listMode, layout, open, nConv,
 	)
 }

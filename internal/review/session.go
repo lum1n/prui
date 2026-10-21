@@ -19,6 +19,7 @@ type Session struct {
 	Repo     domain.RepoRef     `json:"repo"`
 	Number   int                `json:"number"`
 	Draft    domain.DraftReview `json:"draft"`
+	AIReview *domain.AIReview   `json:"ai_review,omitempty"`
 	Updated  time.Time          `json:"updated"`
 }
 
@@ -119,5 +120,132 @@ func (s *Session) RemoveComment(id string) error {
 		}
 	}
 	s.Draft.Comments = out
+	// An accepted AI suggestion whose draft is gone goes back to pending.
+	if s.AIReview != nil {
+		for i := range s.AIReview.Suggestions {
+			if s.AIReview.Suggestions[i].DraftID == id {
+				s.AIReview.Suggestions[i].DraftID = ""
+				s.AIReview.Suggestions[i].Status = domain.SuggestionPending
+			}
+		}
+	}
 	return Save(s)
+}
+
+// SetAIReview stores a new AI review. Accepted suggestions from an earlier
+// run are kept; pending ones are replaced. The review summary is prefilled
+// when the draft has none.
+func (s *Session) SetAIReview(r domain.AIReview) error {
+	var kept []domain.AISuggestion
+	if s.AIReview != nil {
+		for _, sg := range s.AIReview.Suggestions {
+			if sg.Status == domain.SuggestionAccepted {
+				kept = append(kept, sg)
+			}
+		}
+	}
+	for i := range r.Suggestions {
+		if r.Suggestions[i].ID == "" {
+			r.Suggestions[i].ID = fmt.Sprintf("ai-%d-%d", time.Now().UnixNano(), i)
+		}
+		if r.Suggestions[i].Status == "" {
+			r.Suggestions[i].Status = domain.SuggestionPending
+		}
+	}
+	r.Suggestions = append(kept, r.Suggestions...)
+	s.AIReview = &r
+	if s.Draft.Summary == "" {
+		s.Draft.Summary = r.Summary
+	}
+	return Save(s)
+}
+
+// Suggestion returns the AI suggestion with id, or nil.
+func (s *Session) Suggestion(id string) *domain.AISuggestion {
+	if s.AIReview == nil {
+		return nil
+	}
+	for i := range s.AIReview.Suggestions {
+		if s.AIReview.Suggestions[i].ID == id {
+			return &s.AIReview.Suggestions[i]
+		}
+	}
+	return nil
+}
+
+// AcceptSuggestion turns a pending suggestion into a draft comment with body
+// (the suggestion body when empty) and saves.
+func (s *Session) AcceptSuggestion(id, body string) error {
+	sg := s.Suggestion(id)
+	if sg == nil {
+		return fmt.Errorf("ai suggestion %s not found", id)
+	}
+	if sg.Status == domain.SuggestionAccepted {
+		return nil
+	}
+	if body == "" {
+		body = sg.Body
+	}
+	sg.Body = body
+	dc := domain.DraftComment{
+		ID:     fmt.Sprintf("%d", time.Now().UnixNano()),
+		Body:   body,
+		Path:   sg.Path,
+		Anchor: sg.Anchor,
+	}
+	sg.Status = domain.SuggestionAccepted
+	sg.DraftID = dc.ID
+	return s.AddComment(dc)
+}
+
+// UpdateSuggestion edits a suggestion body; for accepted ones the linked
+// draft comment is updated too.
+func (s *Session) UpdateSuggestion(id, body string) error {
+	sg := s.Suggestion(id)
+	if sg == nil {
+		return fmt.Errorf("ai suggestion %s not found", id)
+	}
+	sg.Body = body
+	if sg.Status == domain.SuggestionAccepted && sg.DraftID != "" {
+		for i := range s.Draft.Comments {
+			if s.Draft.Comments[i].ID == sg.DraftID {
+				s.Draft.Comments[i].Body = body
+			}
+		}
+	}
+	return Save(s)
+}
+
+// RemoveSuggestion drops a suggestion. A draft created from it is removed too.
+func (s *Session) RemoveSuggestion(id string) error {
+	sg := s.Suggestion(id)
+	if sg == nil {
+		return fmt.Errorf("ai suggestion %s not found", id)
+	}
+	draftID := sg.DraftID
+	out := s.AIReview.Suggestions[:0]
+	for _, x := range s.AIReview.Suggestions {
+		if x.ID != id {
+			out = append(out, x)
+		}
+	}
+	s.AIReview.Suggestions = out
+	if draftID != "" {
+		return s.RemoveComment(draftID)
+	}
+	return Save(s)
+}
+
+// PendingSuggestions counts suggestions not yet accepted.
+func (s *Session) PendingSuggestions() int {
+	if s == nil || s.AIReview == nil {
+		return 0
+	}
+	n := 0
+	for _, sg := range s.AIReview.Suggestions {
+		if sg.Status != domain.SuggestionAccepted {
+			n++
+		}
+	}
+	return n
 }

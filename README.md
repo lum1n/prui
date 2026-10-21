@@ -11,6 +11,7 @@ Terminal UI for reviewing pull requests on **GitHub** (cloud + Enterprise) and *
 - Multi-host config (on-prem URLs, optional custom CA)
 - Review status: approvals, change requests, and whether you approved
 - Optional **AI summarize** (`S`) via Claude, GitHub Copilot, Codex, or OpenCode
+- Optional **AI review** (`A`): accept, edit or delete the model's suggested comments, then submit
 - Device login: `prui auth login` stores a token so you don’t need to export secrets
 
 ## Install
@@ -164,6 +165,25 @@ ai:
       # binary: opencode
 ```
 
+### AI review
+
+Press **`A`** in review or overview to have `ai.default` review the PR. It uses the same `ai` config as summarize. The model returns a review summary, a suggested verdict and inline comments anchored to diff lines. Comments that don't match a line in the diff are kept as general comments.
+
+On the AI review screen:
+
+| Key | Action |
+|-----|--------|
+| `a` / `Enter` | Accept: becomes a normal draft comment |
+| `Ctrl+a` | Accept all pending |
+| `e` | Edit (also updates the draft if already accepted) |
+| `x` / `d` | Delete (also removes its draft) |
+| `o` | Show the line in the diff (`A` brings you back) |
+| `c` | Add a general comment |
+| `r` | Submit |
+| `Ctrl+r` | Run the review again (accepted suggestions are kept) |
+
+Suggestions are saved with your drafts, so they survive a restart until you submit. On the submit screen the AI verdict is preselected, the summary is prefilled, and `s` edits it (`ctrl+s` saves). Suggestions you haven't accepted are not sent.
+
 If Copilot returns `The requested model is not supported`, set `model` to one your org allows (for example `gpt-4o`), or omit `model` to let prui pick.
 
 ## Usage
@@ -194,6 +214,7 @@ prui version
 | `C` | Overview focused on conversation |
 | `S` | AI summarize (`ai.default`, current detail level) |
 | `s` | Cycle summary detail: short → medium → full |
+| `A` | AI review: triage suggested comments, then submit |
 | `d` | Toggle unified / split layout |
 | `t` | Toggle flat / tree file list |
 | `a` | Toggle this-file / all-files view |
@@ -212,7 +233,7 @@ prui version
 | `?` | Help |
 | `q` | Back / quit |
 
-Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): tab through Tasks / Description / Summary / Conversation. Submit (`r`) offers Comment, Approve, and Request changes. **Merged** PRs are view-only (no comments, task toggles, or submit).
+Comment editor: `enter`/`ctrl+s` save, `esc` cancel. On a threaded line, targets are numbered when focused (`▸`); use `,`/`.` or `1`–`9`, then `R`. Overview (`p`): tab through Tasks / Description / Summary / Conversation. Submit (`r`) offers Comment, Approve, and Request changes; `s` edits the review summary. **Merged** PRs are view-only (no comments, task toggles, or submit).
 
 ## Architecture
 

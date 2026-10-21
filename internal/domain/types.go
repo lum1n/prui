@@ -251,6 +251,34 @@ type DraftReview struct {
 	RemoteID int64
 }
 
+// SuggestionStatus tracks an AI suggestion through triage.
+type SuggestionStatus string
+
+const (
+	SuggestionPending  SuggestionStatus = "pending"
+	SuggestionAccepted SuggestionStatus = "accepted"
+)
+
+// AISuggestion is one inline or general comment proposed by an AI review.
+type AISuggestion struct {
+	ID       string
+	Path     string
+	Anchor   *Anchor // nil = general / review-level
+	Body     string
+	Severity string // issue | suggestion | nit | question
+	Status   SuggestionStatus
+	DraftID  string // draft comment created on accept
+}
+
+// AIReview is the result of an AI review run, kept until submit.
+type AIReview struct {
+	Summary     string
+	Verdict     ReviewAction
+	Model       string
+	Suggestions []AISuggestion
+	Created     time.Time
+}
+
 // ListOpts filters PR listings.
 type ListOpts struct {
 	State    string // open (ready, non-draft), draft, merged, closed, all

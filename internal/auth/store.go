@@ -16,7 +16,8 @@ type fileStore struct {
 }
 
 type storeFile struct {
-	Tokens map[string]string `json:"tokens"` // hostname → token
+	Tokens  map[string]string `json:"tokens"`            // hostname → token
+	Cookies map[string]string `json:"cookies,omitempty"` // hostname → Cookie header value
 }
 
 func defaultStorePath() (string, error) {
@@ -81,6 +82,49 @@ func DeleteToken(hostname string) error {
 	return s.delete(hostname)
 }
 
+// LoadCookie returns a stored session cookie for hostname, if any.
+func LoadCookie(hostname string) (string, error) {
+	hostname = normalizeHostname(hostname)
+	if hostname == "" {
+		return "", nil
+	}
+	path, err := defaultStorePath()
+	if err != nil {
+		return "", err
+	}
+	s := &fileStore{path: path}
+	return s.getCookie(hostname)
+}
+
+// SaveCookie stores a session cookie (Cookie header value) for hostname (0600 file).
+func SaveCookie(hostname, cookie string) error {
+	hostname = normalizeHostname(hostname)
+	cookie = normalizeCookie(cookie)
+	if hostname == "" || cookie == "" {
+		return fmt.Errorf("hostname and cookie are required")
+	}
+	path, err := defaultStorePath()
+	if err != nil {
+		return err
+	}
+	s := &fileStore{path: path}
+	return s.update(func(f *storeFile) { f.Cookies[hostname] = cookie })
+}
+
+// DeleteCookie removes a stored session cookie for hostname.
+func DeleteCookie(hostname string) error {
+	hostname = normalizeHostname(hostname)
+	if hostname == "" {
+		return nil
+	}
+	path, err := defaultStorePath()
+	if err != nil {
+		return err
+	}
+	s := &fileStore{path: path}
+	return s.update(func(f *storeFile) { delete(f.Cookies, hostname) })
+}
+
 func (s *fileStore) get(hostname string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -91,31 +135,32 @@ func (s *fileStore) get(hostname string) (string, error) {
 	return strings.TrimSpace(f.Tokens[hostname]), nil
 }
 
-func (s *fileStore) set(hostname, token string) error {
+func (s *fileStore) getCookie(hostname string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f, err := s.read()
 	if err != nil {
-		return err
+		return "", err
 	}
-	if f.Tokens == nil {
-		f.Tokens = map[string]string{}
-	}
-	f.Tokens[hostname] = token
-	return s.write(f)
+	return strings.TrimSpace(f.Cookies[hostname]), nil
+}
+
+func (s *fileStore) set(hostname, token string) error {
+	return s.update(func(f *storeFile) { f.Tokens[hostname] = token })
 }
 
 func (s *fileStore) delete(hostname string) error {
+	return s.update(func(f *storeFile) { delete(f.Tokens, hostname) })
+}
+
+func (s *fileStore) update(fn func(*storeFile)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f, err := s.read()
 	if err != nil {
 		return err
 	}
-	if f.Tokens == nil {
-		return nil
-	}
-	delete(f.Tokens, hostname)
+	fn(&f)
 	return s.write(f)
 }
 
@@ -123,7 +168,7 @@ func (s *fileStore) read() (storeFile, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return storeFile{Tokens: map[string]string{}}, nil
+			return storeFile{Tokens: map[string]string{}, Cookies: map[string]string{}}, nil
 		}
 		return storeFile{}, err
 	}
@@ -133,6 +178,9 @@ func (s *fileStore) read() (storeFile, error) {
 	}
 	if f.Tokens == nil {
 		f.Tokens = map[string]string{}
+	}
+	if f.Cookies == nil {
+		f.Cookies = map[string]string{}
 	}
 	return f, nil
 }

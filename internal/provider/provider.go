@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/lum1n/prui/internal/domain"
+	"github.com/lum1n/prui/internal/provider/httputil"
 )
 
 // Host is the forge adapter contract.
@@ -25,6 +26,18 @@ type Host interface {
 	// GetReviewStatus returns approvals / change-requests and the viewer's decision.
 	GetReviewStatus(ctx context.Context, ref domain.PRRef) (domain.ReviewStatus, error)
 }
+
+// CookieSession is implemented by hosts whose browser session cookie can be
+// refreshed at runtime (Bitbucket Data Center).
+type CookieSession interface {
+	Cookie() string
+	SetCookie(cookie string)
+	// ValidateCookie checks the cookie against the server and returns the username if known.
+	ValidateCookie(ctx context.Context, cookie string) (string, error)
+}
+
+// IsAuthError reports whether err means the credentials are missing or expired.
+func IsAuthError(err error) bool { return httputil.IsUnauthorized(err) }
 
 // SupportsRequestChanges reports whether the host has a first-class request-changes action.
 func SupportsRequestChanges(kind domain.HostKind) bool {

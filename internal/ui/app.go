@@ -45,6 +45,8 @@ type Options struct {
 	Provider provider.Host
 	Repo     domain.RepoRef
 	PRNumber int // 0 = show list
+	// NeedLogin opens the cookie login dialog at startup (no credentials found).
+	NeedLogin bool
 }
 
 type prItem struct {
@@ -122,6 +124,8 @@ type Model struct {
 	summarizing   bool
 	summaryGen    int // bumps to ignore stale summarize results
 	summaryDetail ai.DetailLevel
+
+	login cookieLogin
 }
 
 type loadedPRsMsg struct {
@@ -219,6 +223,10 @@ func NewModel(opts Options) Model {
 	if opts.PRNumber > 0 {
 		m.screen = screenReview
 	}
+	if opts.NeedLogin {
+		m.loading = false
+		m.openCookieLogin("No session cookie found for " + opts.Host.Name + ".")
+	}
 	return m
 }
 
@@ -248,6 +256,7 @@ const defaultHelp = `Keys
   enter     expand/collapse omitted unchanged lines (on ··· gap)
   o         show PR URL in status
   O         open PR in browser
+  L         Bitbucket DC: log in / refresh session cookie
   ?         help
   q/esc     back / quit
 
@@ -264,6 +273,9 @@ Views
   merged      view-only: browse diff/overview, no comments or submit`
 
 func (m Model) Init() tea.Cmd {
+	if m.opts.NeedLogin {
+		return nil
+	}
 	if m.opts.PRNumber > 0 {
 		return m.loadReview(m.opts.PRNumber)
 	}
@@ -359,6 +371,30 @@ func (m Model) loadAllDiffs(gen int) tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if v, ok := msg.(cookieValidatedMsg); ok {
+		return m.handleCookieValidated(v)
+	}
+	if m.login.active {
+		switch k := msg.(type) {
+		case tea.KeyMsg:
+			return m.updateCookieLogin(k)
+		case tea.MouseMsg:
+			return m, nil
+		}
+	} else if k, ok := msg.(tea.KeyMsg); ok && k.String() == "L" && m.cookieSession() != nil && !m.commenting &&
+		!(m.screen == screenPRList && m.prList.FilterState() == list.Filtering) {
+		m.openCookieLogin("")
+		return m, nil
+	}
+	authExpired := provider.IsAuthError(msgErr(msg)) && m.cookieAutoLogin()
+	next, cmd := m.update(msg)
+	if authExpired {
+		return next.(Model).onAuthExpired(cmd)
+	}
+	return next, cmd
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -2499,6 +2535,9 @@ func (m Model) View() string {
 		}
 		body = inner
 	}
+	if m.login.active {
+		body = m.cookieLoginView(m.width, max(1, m.height-3))
+	}
 
 	status := m.status
 	if m.errMsg != "" {
@@ -2510,13 +2549,16 @@ func (m Model) View() string {
 
 	helpH := 0
 	var helpBar string
-	switch m.screen {
-	case screenReview, screenSubmit, screenOverview:
+	switch {
+	case m.login.active:
+		helpH = 1
+		helpBar = helpBarStyle.Width(m.width).MaxWidth(m.width).MaxHeight(1).Render(truncate(cookieLoginHelpLine(), m.width))
+	case m.screen == screenReview, m.screen == screenSubmit, m.screen == screenOverview:
 		helpH = 1
 		helpBar = helpBarStyle.Width(m.width).MaxWidth(m.width).MaxHeight(1).Render(truncate(m.reviewHelpLine(), m.width))
-	case screenPRList:
+	case m.screen == screenPRList:
 		helpH = 1
-		helpBar = helpBarStyle.Width(m.width).MaxWidth(m.width).MaxHeight(1).Render(truncate(prListHelpLine(), m.width))
+		helpBar = helpBarStyle.Width(m.width).MaxWidth(m.width).MaxHeight(1).Render(truncate(prListHelpLine(m.cookieSession() != nil), m.width))
 	}
 
 	// Title + help + status are fixed chrome; body fills the rest.

@@ -129,6 +129,9 @@ func renderPRTabs(active prListTab, width int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, row, rule)
 }
 
-func prListHelpLine() string {
+func prListHelpLine(cookieLogin bool) string {
+	if cookieLogin {
+		return "enter open · tab/←→ · 1–3 jump · / filter · O browser · L login · ? · q"
+	}
 	return "enter open · tab/←→ · 1–3 jump · / filter · O browser · ? · q"
 }

@@ -15,7 +15,7 @@ type Credentials struct {
 	Token    string
 	Cookie   string // raw Cookie header value for session auth
 	Username string
-	Source   string // env | store | gh | cookie
+	Source   string // env | store | gh | cookie | stored-cookie
 }
 
 // HasAuth reports whether any usable credential is present.
@@ -25,6 +25,7 @@ func (c Credentials) HasAuth() bool {
 
 // Resolve loads credentials from cookie_env, token_env, stored login, or gh.
 // Order: cookie (if set) → token_env → ~/.config/prui/credentials.json → gh auth token.
+// Bitbucket DC falls back to a cookie saved from the TUI session login.
 func Resolve(host domain.Host) (Credentials, error) {
 	cred := Credentials{Username: host.Username}
 
@@ -54,6 +55,14 @@ func Resolve(host domain.Host) (Credentials, error) {
 		}
 	}
 
+	if SupportsCookieLogin(host) {
+		if c, err := LoadCookie(Hostname(host)); err == nil && c != "" {
+			cred.Cookie = c
+			cred.Source = "stored-cookie"
+			return cred, nil
+		}
+	}
+
 	if host.Kind == domain.HostGitHub {
 		hn := githubHostname(host)
 		if tok, err := LoadToken(hn); err == nil && tok != "" {
@@ -73,7 +82,7 @@ func Resolve(host domain.Host) (Credentials, error) {
 	case host.CookieEnv != "" && envName != "":
 		return cred, fmt.Errorf("auth not set: export %s (cookie) or %s (token) for host %q", host.CookieEnv, envName, host.Name)
 	case host.CookieEnv != "":
-		return cred, fmt.Errorf("cookie not set: export %s (host %q)", host.CookieEnv, host.Name)
+		return cred, fmt.Errorf("cookie not set: export %s or log in from the TUI (host %q)", host.CookieEnv, host.Name)
 	case envName != "":
 		return cred, fmt.Errorf("token not set: export %s (host %q)", envName, host.Name)
 	default:
@@ -88,6 +97,20 @@ func normalizeCookie(v string) string {
 		v = strings.TrimSpace(v[7:])
 	}
 	return v
+}
+
+// SupportsCookieLogin reports whether the host accepts browser session cookies
+// that can be refreshed from the TUI.
+func SupportsCookieLogin(host domain.Host) bool {
+	return host.Kind == domain.HostBitbucketDC
+}
+
+// Hostname returns the forge hostname for host (base URL, else API URL).
+func Hostname(host domain.Host) string {
+	if h := HostnameOf(host.BaseURL); h != "" {
+		return h
+	}
+	return HostnameOf(host.APIURL)
 }
 
 func isGitHubDotCom(host domain.Host) bool {
@@ -138,7 +161,11 @@ func StatusLine(host domain.Host) string {
 		return fmt.Sprintf("%s (%s): missing — %v", host.Name, host.Kind, err)
 	}
 	if cred.Cookie != "" {
-		return fmt.Sprintf("%s (%s): ok cookie %s", host.Name, host.Kind, mask(cred.Cookie))
+		src := "env"
+		if cred.Source == "stored-cookie" {
+			src = "saved"
+		}
+		return fmt.Sprintf("%s (%s): ok cookie (%s) %s", host.Name, host.Kind, src, mask(cred.Cookie))
 	}
 	user := cred.Username
 	if user == "" {

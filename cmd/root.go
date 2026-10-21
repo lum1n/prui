@@ -94,7 +94,7 @@ pass --client-id from an OAuth App on that GHE.`,
 
 var authLogoutCmd = &cobra.Command{
 	Use:   "logout",
-	Short: "Remove a stored prui token for a hostname",
+	Short: "Remove a stored prui token / session cookie for a hostname",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		hn := strings.TrimSpace(authHostname)
 		if hostName != "" {
@@ -113,7 +113,10 @@ var authLogoutCmd = &cobra.Command{
 		if err := auth.DeleteToken(hn); err != nil {
 			return err
 		}
-		fmt.Printf("Removed stored token for %s\n", auth.HostnameOf(hn))
+		if err := auth.DeleteCookie(hn); err != nil {
+			return err
+		}
+		fmt.Printf("Removed stored credentials for %s\n", auth.HostnameOf(hn))
 		return nil
 	},
 }
@@ -258,16 +261,26 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	p, err := provider.New(resolved.Host)
+	cred, err := auth.Resolve(resolved.Host)
+	needLogin := false
+	if err != nil {
+		// Cookie hosts can log in from inside the TUI instead of failing here.
+		if !auth.SupportsCookieLogin(resolved.Host) || cred.Token != "" {
+			return err
+		}
+		needLogin = true
+	}
+	p, err := provider.NewWithCredentials(resolved.Host, cred)
 	if err != nil {
 		return err
 	}
 	return ui.Run(ui.Options{
-		Config:   appCfg,
-		Host:     resolved.Host,
-		Provider: p,
-		Repo:     resolved.Repo,
-		PRNumber: resolved.PR,
+		Config:    appCfg,
+		Host:      resolved.Host,
+		Provider:  p,
+		Repo:      resolved.Repo,
+		PRNumber:  resolved.PR,
+		NeedLogin: needLogin,
 	})
 }
 

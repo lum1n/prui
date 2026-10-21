@@ -21,6 +21,11 @@ func New(host domain.Host) (Host, error) {
 	if err != nil {
 		return nil, err
 	}
+	return NewWithCredentials(host, cred)
+}
+
+// NewWithCredentials creates a Host adapter using already-resolved credentials.
+func NewWithCredentials(host domain.Host, cred auth.Credentials) (Host, error) {
 	client, err := HTTPClient(host)
 	if err != nil {
 		return nil, err

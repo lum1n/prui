@@ -106,7 +106,17 @@ prui auth status
 prui auth logout --hostname github.com
 ```
 
-Bitbucket cookie example:
+#### Bitbucket Data Center without a token
+
+Log in from the TUI instead of exporting `BB_COOKIE`. The login dialog opens automatically when there is no session or the session has expired, and you can open it manually with `L`:
+
+1. Press `Ctrl+O` to open Bitbucket in your browser and log in (SSO is fine).
+2. In DevTools → Network, copy the `Cookie` request header from any request. Copying the whole request with *Copy as cURL* or *Copy as fetch* also works.
+3. Press `Ctrl+V` to paste from the clipboard (or type the value and press `Enter`).
+
+prui checks the cookie, saves it to `~/.config/prui/credentials.json` (0600), and reloads the current view. Run `prui auth logout --host NAME` to remove it.
+
+Resolution order for Bitbucket DC: **env cookie → env token → saved cookie**. If `BB_COOKIE` is set but stale, prui tries the saved cookie before prompting. `BB_COOKIE` is still supported:
 
 ```bash
 export BB_COOKIE='JSESSIONID=...; BITBUCKETSESSIONID=...'
@@ -198,6 +208,7 @@ prui version
 | `[`/`]` | Prev/next hunk |
 | `o` | Show PR URL |
 | `O` | Open PR in browser |
+| `L` | Bitbucket DC: log in / refresh session cookie |
 | `?` | Help |
 | `q` | Back / quit |
 

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lum1n/prui/internal/auth"
@@ -25,6 +26,9 @@ type Client struct {
 	cred auth.Credentials
 	http *http.Client
 	api  string
+
+	mu     sync.RWMutex // guards cookie (swapped live from the TUI)
+	cookie string
 }
 
 // New constructs a Bitbucket DC adapter.
@@ -38,15 +42,62 @@ func New(host domain.Host, cred auth.Credentials, httpClient *http.Client) (*Cli
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Client{host: host, cred: cred, http: httpClient, api: api}, nil
+	return &Client{host: host, cred: cred, http: httpClient, api: api, cookie: cred.Cookie}, nil
 }
 
 func (c *Client) Kind() domain.HostKind { return domain.HostBitbucketDC }
 
+// Cookie returns the session cookie currently in use (empty for token auth).
+func (c *Client) Cookie() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cookie
+}
+
+// SetCookie swaps the session cookie used for subsequent requests.
+func (c *Client) SetCookie(cookie string) {
+	c.mu.Lock()
+	c.cookie = cookie
+	c.mu.Unlock()
+}
+
+// ValidateCookie checks that cookie is an authenticated session and returns the
+// username when the server reports one.
+func (c *Client) ValidateCookie(ctx context.Context, cookie string) (string, error) {
+	h := map[string]string{"Cookie": cookie}
+	if base := strings.TrimRight(c.host.BaseURL, "/"); base != "" {
+		data, status, err := httputil.DoRaw(ctx, c.http, http.MethodGet, base+"/plugins/servlet/applinks/whoami", h, nil)
+		if err != nil && status != http.StatusNotFound {
+			if httputil.IsUnauthorized(err) {
+				return "", fmt.Errorf("cookie rejected by %s (expired or incomplete)", c.host.Name)
+			}
+			return "", err
+		}
+		if err == nil {
+			id := strings.TrimSpace(string(data))
+			if id == "" || strings.Contains(id, "<") {
+				return "", fmt.Errorf("cookie rejected by %s (not logged in — copy cookies after signing in)", c.host.Name)
+			}
+			return id, nil
+		}
+	}
+	// whoami servlet missing: fall back to an endpoint that requires a user.
+	var out struct {
+		Count int `json:"count"`
+	}
+	if _, err := httputil.DoJSON(ctx, c.http, http.MethodGet, c.api+"/inbox/pull-requests/count", h, nil, &out); err != nil {
+		if httputil.IsUnauthorized(err) {
+			return "", fmt.Errorf("cookie rejected by %s (expired or incomplete)", c.host.Name)
+		}
+		return "", err
+	}
+	return "", nil
+}
+
 func (c *Client) headers() map[string]string {
 	h := map[string]string{"Accept": "application/json"}
-	if c.cred.Cookie != "" {
-		h["Cookie"] = c.cred.Cookie
+	if cookie := c.Cookie(); cookie != "" {
+		h["Cookie"] = cookie
 		return h
 	}
 	if c.cred.Username != "" {

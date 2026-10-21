@@ -12,7 +12,7 @@ import (
 // tag so `go build` / `go install .` still report a real version. `go install
 // github.com/lum1n/prui/cmd/prui@vX.Y.Z` overwrites this from module build info.
 var (
-	Version = "0.1.0"
+	Version = "0.2.0"
 	Commit  = "none"
 	Date    = "unknown"
 )
